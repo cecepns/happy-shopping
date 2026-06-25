@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { CartProvider } from './context/CartContext';
@@ -28,9 +28,12 @@ import LoadingSpinner from './components/ui/LoadingSpinner';
 
 function ProtectedRoute({ children, roles }) {
   const { user, loading } = useAuth();
+  const location = useLocation();
   if (loading) return <LoadingSpinner />;
-  if (!user) return <Navigate to="/login" replace />;
-  if (roles && !roles.includes(user.role)) return <Navigate to="/" replace />;
+  if (!user) return <Navigate to="/login" state={{ from: location }} replace />;
+  if (roles && !roles.includes(user.role)) {
+    return <Navigate to="/login" state={{ from: location, requireRole: 'pembeli' }} replace />;
+  }
   return children;
 }
 

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
-import { ShoppingCart, MessageCircle, Store, Minus, Plus } from 'lucide-react';
+import { useParams, Link, useNavigate } from 'react-router-dom';
+import { ShoppingCart, MessageCircle, Store, Minus, Plus, Zap } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { get, post } from '../utils/request';
 import { API_ENDPOINTS } from '../utils/endpoints';
@@ -13,12 +13,13 @@ import Footer from '../components/layout/Footer';
 
 export default function ProductDetail() {
   const { id } = useParams();
+  const navigate = useNavigate();
   const [product, setProduct] = useState(null);
   const [loading, setLoading] = useState(true);
   const [selectedModel, setSelectedModel] = useState('');
   const [selectedVariant, setSelectedVariant] = useState(null);
   const [qty, setQty] = useState(1);
-  const { addItem } = useCart();
+  const { addItem, buyNow } = useCart();
   const { user } = useAuth();
 
   useEffect(() => {
@@ -37,11 +38,42 @@ export default function ProductDetail() {
 
   const displayImage = selectedVariant?.image || product?.images?.[0];
 
+  const validateSelection = () => {
+    if (!selectedVariant) {
+      toast.error('Pilih variant');
+      return false;
+    }
+    if (selectedVariant.stock < qty) {
+      toast.error('Stok tidak cukup');
+      return false;
+    }
+    return true;
+  };
+
   const handleAddCart = () => {
-    if (!selectedVariant) return toast.error('Pilih variant');
-    if (selectedVariant.stock < qty) return toast.error('Stok tidak cukup');
+    if (!validateSelection()) return;
     addItem(product, selectedVariant, qty);
     toast.success('Ditambahkan ke keranjang');
+  };
+
+  const goToCheckout = () => {
+    if (!user) {
+      navigate('/login', { state: { from: { pathname: '/checkout' } } });
+      toast('Login sebagai pembeli untuk checkout', { icon: '🛒' });
+      return;
+    }
+    if (user.role !== 'pembeli') {
+      navigate('/login', { state: { from: { pathname: '/checkout' }, requireRole: 'pembeli' } });
+      toast.error('Checkout hanya untuk akun pembeli');
+      return;
+    }
+    navigate('/checkout');
+  };
+
+  const handleBuyNow = () => {
+    if (!validateSelection()) return;
+    buyNow(product, selectedVariant, qty);
+    goToCheckout();
   };
 
   const startChat = async () => {
@@ -117,17 +149,20 @@ export default function ProductDetail() {
             <div className="mt-4 flex items-center gap-3">
               <span className="text-sm font-semibold">Jumlah:</span>
               <div className="flex items-center rounded-xl border border-gray-200">
-                <button onClick={() => setQty(Math.max(1, qty - 1))} className="p-2"><Minus size={16} /></button>
+                <button type="button" onClick={() => setQty(Math.max(1, qty - 1))} className="p-2"><Minus size={16} /></button>
                 <span className="w-10 text-center font-medium">{qty}</span>
-                <button onClick={() => setQty(qty + 1)} className="p-2"><Plus size={16} /></button>
+                <button type="button" onClick={() => setQty(Math.min(selectedVariant?.stock || qty + 1, qty + 1))} className="p-2"><Plus size={16} /></button>
               </div>
             </div>
 
-            <div className="mt-6 flex flex-wrap gap-3">
-              <button onClick={handleAddCart} className="btn-primary flex-1 sm:flex-none">
-                <ShoppingCart size={18} /> Tambah Keranjang
+            <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
+              <button type="button" onClick={handleBuyNow} className="btn-primary flex-1 sm:min-w-[160px]">
+                <Zap size={18} /> Beli Langsung
               </button>
-              <button onClick={startChat} className="btn-secondary">
+              <button type="button" onClick={handleAddCart} className="btn-secondary flex-1 sm:min-w-[160px]">
+                <ShoppingCart size={18} /> Keranjang
+              </button>
+              <button type="button" onClick={startChat} className="btn-secondary sm:min-w-[140px]">
                 <MessageCircle size={18} /> Chat Seller
               </button>
             </div>

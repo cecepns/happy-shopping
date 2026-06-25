@@ -1,18 +1,19 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { Loader2 } from 'lucide-react';
+import { Loader2, Minus, Plus } from 'lucide-react';
 import { get, post } from '../utils/request';
 import { API_ENDPOINTS } from '../utils/endpoints';
 import { formatCurrency } from '../utils/api';
 import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
 import useDebounce from '../hooks/useDebounce';
+import QuantityInput from '../components/ui/QuantityInput';
 import Navbar from '../components/layout/Navbar';
 import Footer from '../components/layout/Footer';
 
 export default function Checkout() {
-  const { items, total, clearCart } = useCart();
+  const { items, total, clearCart, updateQty } = useCart();
   const { user, refreshProfile } = useAuth();
   const navigate = useNavigate();
   const [form, setForm] = useState({ recipient_name: '', recipient_phone: '', shipping_address: '', notes: '' });
@@ -33,10 +34,9 @@ export default function Checkout() {
   }, {});
 
   useEffect(() => {
-    if (!user) { navigate('/login'); return; }
-    if (!items.length) { navigate('/cart'); return; }
-    setForm(f => ({ ...f, recipient_name: user.name || '', recipient_phone: user.phone || '' }));
-  }, [user, items]);
+    if (!items.length) navigate('/cart');
+    else if (user) setForm(f => ({ ...f, recipient_name: user.name || '', recipient_phone: user.phone || '' }));
+  }, [user, items, navigate]);
 
   useEffect(() => {
     if (debouncedDest.length >= 3) {
@@ -53,7 +53,7 @@ export default function Checkout() {
       const cheapest = (res.data || [])[0];
       if (cheapest) opts[sellerId] = { cost: cheapest.cost, courier: cheapest.code, service: cheapest.service, etd: cheapest.etd };
     })).then(() => { setShippingOptions(opts); setLoadingShip(false); });
-  }, [selectedDest]);
+  }, [selectedDest, items]);
 
   const totalShipping = Object.values(shippingOptions).reduce((s, o) => s + (parseFloat(o.cost) || 0), 0);
   const grandTotal = total + totalShipping;
@@ -130,9 +130,34 @@ export default function Checkout() {
           <div className="card h-fit p-4 lg:col-span-2">
             <h3 className="font-semibold">Ringkasan</h3>
             {items.map(i => (
-              <div key={i.variant_id} className="mt-2 flex justify-between text-sm">
-                <span className="line-clamp-1 flex-1">{i.product_name} x{i.quantity}</span>
-                <span>{formatCurrency(i.price * i.quantity)}</span>
+              <div key={i.variant_id} className="mt-3 flex items-center justify-between gap-3 text-sm">
+                <div className="min-w-0 flex-1">
+                  <p className="line-clamp-1 font-medium">{i.product_name}</p>
+                  <p className="text-xs text-gray-500">{i.model} - {i.variant_name}</p>
+                </div>
+                <div className="flex items-center rounded-lg border border-gray-200">
+                  <button
+                    type="button"
+                    onClick={() => updateQty(i.variant_id, Math.max(1, i.quantity - 1))}
+                    className="p-1.5 text-gray-500 hover:text-primary-600"
+                  >
+                    <Minus size={12} />
+                  </button>
+                  <QuantityInput
+                    value={i.quantity}
+                    max={i.stock}
+                    onChange={(qty) => updateQty(i.variant_id, qty)}
+                    className="w-10 border-0 bg-transparent !py-0.5 text-center text-sm shadow-none focus:ring-0"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => updateQty(i.variant_id, Math.min(i.stock, i.quantity + 1))}
+                    className="p-1.5 text-gray-500 hover:text-primary-600"
+                  >
+                    <Plus size={12} />
+                  </button>
+                </div>
+                <span className="w-24 text-right font-medium">{formatCurrency(i.price * i.quantity)}</span>
               </div>
             ))}
             <div className="mt-3 space-y-1 border-t pt-3 text-sm">

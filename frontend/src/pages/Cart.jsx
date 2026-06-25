@@ -1,7 +1,8 @@
 import { Link } from 'react-router-dom';
-import { Trash2, ShoppingBag } from 'lucide-react';
+import { Trash2, ShoppingBag, Minus, Plus } from 'lucide-react';
 import { useCart } from '../context/CartContext';
 import { formatCurrency, assetUrl } from '../utils/api';
+import QuantityInput from '../components/ui/QuantityInput';
 import Navbar from '../components/layout/Navbar';
 import Footer from '../components/layout/Footer';
 
@@ -30,9 +31,29 @@ export default function Cart() {
                     <p className="text-sm text-gray-500">{item.model} - {item.variant_name}</p>
                     <p className="mt-1 font-bold text-primary-600">{formatCurrency(item.price)}</p>
                     <div className="mt-2 flex items-center gap-3">
-                      <input type="number" min="1" max={item.stock} className="input-field w-20 !py-1" value={item.quantity}
-                        onChange={e => updateQty(item.variant_id, parseInt(e.target.value) || 1)} />
-                      <button onClick={() => removeItem(item.variant_id)} className="text-red-500"><Trash2 size={16} /></button>
+                      <div className="flex items-center rounded-xl border border-gray-200">
+                        <button
+                          type="button"
+                          onClick={() => updateQty(item.variant_id, Math.max(1, item.quantity - 1))}
+                          className="p-2 text-gray-500 hover:text-primary-600"
+                        >
+                          <Minus size={14} />
+                        </button>
+                        <QuantityInput
+                          value={item.quantity}
+                          max={item.stock}
+                          onChange={(qty) => updateQty(item.variant_id, qty)}
+                          className="w-12 border-0 bg-transparent !py-1 text-center shadow-none focus:ring-0"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => updateQty(item.variant_id, Math.min(item.stock, item.quantity + 1))}
+                          className="p-2 text-gray-500 hover:text-primary-600"
+                        >
+                          <Plus size={14} />
+                        </button>
+                      </div>
+                      <button type="button" onClick={() => removeItem(item.variant_id)} className="text-red-500"><Trash2 size={16} /></button>
                     </div>
                   </div>
                   <p className="font-bold">{formatCurrency(item.price * item.quantity)}</p>
