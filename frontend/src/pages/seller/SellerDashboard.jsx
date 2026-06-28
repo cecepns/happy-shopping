@@ -15,7 +15,7 @@ export default function SellerDashboard() {
     get(API_ENDPOINTS.SELLER.DASHBOARD).then(res => setData(res.data)).finally(() => setLoading(false));
   }, []);
 
-  if (loading) return <DashboardLayout role="seller" title="Dashboard"><LoadingSpinner /></DashboardLayout>;
+  if (loading) return <DashboardLayout role="store" title="Dashboard"><LoadingSpinner /></DashboardLayout>;
 
   const stats = [
     { label: 'Total Omset', value: formatCurrency(data.total_revenue), icon: DollarSign, color: 'bg-green-500' },
@@ -26,7 +26,7 @@ export default function SellerDashboard() {
   ];
 
   return (
-    <DashboardLayout role="seller" title="Dashboard Seller">
+    <DashboardLayout role="store" title="Dashboard Toko">
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {stats.map(s => (
           <div key={s.label} className="card p-5">

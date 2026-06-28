@@ -59,12 +59,11 @@ export default function ProductDetail() {
   const goToCheckout = () => {
     if (!user) {
       navigate('/login', { state: { from: { pathname: '/checkout' } } });
-      toast('Login sebagai pembeli untuk checkout', { icon: '🛒' });
+      toast('Login untuk checkout', { icon: '🛒' });
       return;
     }
-    if (user.role !== 'pembeli') {
-      navigate('/login', { state: { from: { pathname: '/checkout' }, requireRole: 'pembeli' } });
-      toast.error('Checkout hanya untuk akun pembeli');
+    if (user.role === 'admin') {
+      toast.error('Admin tidak dapat checkout');
       return;
     }
     navigate('/checkout');
@@ -80,7 +79,7 @@ export default function ProductDetail() {
     if (!user) return toast.error('Login dulu untuk chat');
     try {
       const res = await post(API_ENDPOINTS.CHAT.CONVERSATIONS, { seller_id: product.seller_user_id, product_id: product.id });
-      window.location.href = user.role === 'pembeli' ? `/buyer/chat?conv=${res.data.id}` : '/login';
+      window.location.href = `/buyer/chat?conv=${res.data.id}`;
     } catch (err) { toast.error(err.message); }
   };
 

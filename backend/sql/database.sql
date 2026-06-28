@@ -15,6 +15,7 @@ DROP TABLE IF EXISTS `products`;
 DROP TABLE IF EXISTS `categories`;
 DROP TABLE IF EXISTS `payment_methods`;
 DROP TABLE IF EXISTS `settings`;
+DROP TABLE IF EXISTS `otp_codes`;
 DROP TABLE IF EXISTS `users`;
 
 CREATE TABLE `users` (
@@ -22,17 +23,28 @@ CREATE TABLE `users` (
   `username` VARCHAR(50) UNIQUE NOT NULL,
   `password` VARCHAR(255) NOT NULL,
   `name` VARCHAR(100) NOT NULL,
-  `email` VARCHAR(100) DEFAULT NULL,
+  `email` VARCHAR(100) NOT NULL,
   `phone` VARCHAR(20) DEFAULT NULL,
   `role` ENUM('admin', 'seller', 'pembeli') NOT NULL DEFAULT 'pembeli',
   `balance` DECIMAL(12,2) NOT NULL DEFAULT 0.00,
   `store_name` VARCHAR(150) DEFAULT NULL,
   `store_description` TEXT DEFAULT NULL,
   `store_address` TEXT DEFAULT NULL,
-  `store_origin_id` VARCHAR(20) DEFAULT '5242',
+  `store_origin_id` VARCHAR(20) DEFAULT NULL,
+  `store_origin_label` VARCHAR(255) DEFAULT NULL,
   `avatar` VARCHAR(255) DEFAULT NULL,
   `is_active` TINYINT NOT NULL DEFAULT 1,
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE `otp_codes` (
+  `id` INT AUTO_INCREMENT PRIMARY KEY,
+  `user_id` INT NOT NULL,
+  `code` VARCHAR(6) NOT NULL,
+  `expires_at` DATETIME NOT NULL,
+  `used` TINYINT NOT NULL DEFAULT 0,
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE `settings` (

@@ -1,5 +1,5 @@
 import { NavLink, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, Package, ShoppingCart, MessageCircle, Image, Users, Wallet, Settings, Menu, X, LogOut, Tags } from 'lucide-react';
+import { LayoutDashboard, Package, ShoppingCart, MessageCircle, Image, Users, Wallet, Settings, Menu, X, LogOut, Tags, Store } from 'lucide-react';
 import { useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 
@@ -14,15 +14,16 @@ const adminLinks = [
   { to: '/admin/settings', icon: Settings, label: 'Settings' }
 ];
 
-const sellerLinks = [
+const storeLinks = [
   { to: '/seller', icon: LayoutDashboard, label: 'Dashboard', end: true },
   { to: '/seller/products', icon: Package, label: 'Produk' },
-  { to: '/seller/orders', icon: ShoppingCart, label: 'Orders' },
-  { to: '/seller/chat', icon: MessageCircle, label: 'Chat' }
+  { to: '/seller/orders', icon: ShoppingCart, label: 'Pesanan' },
+  { to: '/seller/chat', icon: MessageCircle, label: 'Chat' },
+  { to: '/seller/settings', icon: Store, label: 'Pengaturan Toko' }
 ];
 
 export default function DashboardLayout({ role = 'admin', title, children }) {
-  const links = role === 'admin' ? adminLinks : sellerLinks;
+  const links = role === 'admin' ? adminLinks : storeLinks;
   const { logout } = useAuth();
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -31,7 +32,7 @@ export default function DashboardLayout({ role = 'admin', title, children }) {
     <>
       <div className="mb-6 px-4">
         <h2 className="text-lg font-bold text-primary-600">Happy Shopping</h2>
-        <p className="text-xs text-gray-500 capitalize">{role} Panel</p>
+        <p className="text-xs text-gray-500">{role === 'admin' ? 'Admin Panel' : 'Toko Saya'}</p>
       </div>
       <nav className="flex flex-col gap-1 px-2">
         {links.map(({ to, icon: Icon, label, end }) => (

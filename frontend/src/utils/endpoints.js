@@ -9,7 +9,10 @@ export const API_ENDPOINTS = {
   AUTH: {
     LOGIN: '/auth/login',
     REGISTER: '/auth/register',
-    PROFILE: '/auth/profile'
+    PROFILE: '/auth/profile',
+    UPDATE_PROFILE: '/auth/profile',
+    VERIFY_OTP: '/auth/verify-otp',
+    RESEND_OTP: '/auth/resend-otp'
   },
   UPLOAD: {
     SINGLE: '/upload',
@@ -40,7 +43,8 @@ export const API_ENDPOINTS = {
   },
   SHIPPING: {
     DESTINATION: '/shipping/destination',
-    COST: '/shipping/cost'
+    COST: '/shipping/cost',
+    SELLERS_INFO: '/shipping/sellers-info'
   },
   BALANCE: {
     INFO: '/balance',

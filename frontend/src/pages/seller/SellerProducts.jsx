@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Plus, Pencil, Trash2, Search } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { get, post, put, del } from '../../utils/request';
 import { API_ENDPOINTS } from '../../utils/endpoints';
@@ -14,6 +15,7 @@ import LoadingSpinner from '../../components/ui/LoadingSpinner';
 export default function SellerProducts() {
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [storeReady, setStoreReady] = useState(false);
   const [modal, setModal] = useState(null);
   const [editData, setEditData] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -30,6 +32,22 @@ export default function SellerProducts() {
   };
 
   useEffect(() => { load(); }, [page, debouncedSearch]);
+
+  useEffect(() => {
+    get(API_ENDPOINTS.AUTH.PROFILE).then(res => {
+      const d = res.data || {};
+      setStoreReady(!!(d.store_address && d.store_origin_id));
+    });
+  }, []);
+
+  const openCreate = () => {
+    if (!storeReady) {
+      toast.error('Lengkapi alamat toko di Pengaturan Toko terlebih dahulu');
+      return;
+    }
+    setEditData(null);
+    setModal('create');
+  };
 
   const openEdit = async (id) => {
     const res = await get(API_ENDPOINTS.SELLER.PRODUCT(id));
@@ -64,14 +82,20 @@ export default function SellerProducts() {
   };
 
   return (
-    <DashboardLayout role="seller" title="Kelola Produk">
+    <DashboardLayout role="store" title="Kelola Produk">
       <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="relative max-w-sm flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
           <input className="input-field pl-9" placeholder="Cari produk..." value={search} onChange={e => setSearch(e.target.value)} />
         </div>
-        <button onClick={() => { setEditData(null); setModal('create'); }} className="btn-primary"><Plus size={16} /> Tambah Produk</button>
+        <button onClick={openCreate} className="btn-primary"><Plus size={16} /> Tambah Produk</button>
       </div>
+
+      {!storeReady && (
+        <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+          Lengkapi <Link to="/seller/settings" className="font-semibold underline">Pengaturan Toko</Link> (alamat & lokasi pengiriman) sebelum memposting produk.
+        </div>
+      )}
 
       {loading ? <LoadingSpinner /> : (
         <>

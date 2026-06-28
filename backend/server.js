@@ -8,6 +8,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const https = require('https');
+const nodemailer = require('nodemailer');
 
 dotenv.config();
 
@@ -65,6 +66,61 @@ const authorizeRoles = (...roles) => (req, res, next) => {
   }
   next();
 };
+
+const MEMBER_ROLES = ['pembeli', 'seller'];
+const isMember = (role) => MEMBER_ROLES.includes(role);
+const isStoreOwner = (user, sellerId) => user.role === 'admin' || user.id === sellerId;
+
+const generateOtp = () => String(Math.floor(100000 + Math.random() * 900000));
+
+const getMailTransporter = () => {
+  // if (!process.env.SMTP_HOST) return null;
+  return nodemailer.createTransport({
+    host: "smtp.gmail.com",
+    port: parseInt(process.env.SMTP_PORT) || 587,
+    secure: true,
+    auth: { user:"infohepishopping@gmail.com", pass: "pueb yvlg lvsj xsts"}
+  });
+};
+
+const sendOtpEmail = async (email, name, code) => {
+  const subject = 'Kode OTP Login - Happy Shopping';
+  const html = `<div style="font-family:sans-serif;max-width:480px;margin:0 auto">
+    <h2>Happy Shopping</h2>
+    <p>Halo ${name},</p>
+    <p>Kode OTP login Anda:</p>
+    <p style="font-size:32px;font-weight:bold;letter-spacing:8px;color:#4f46e5">${code}</p>
+    <p>Kode berlaku 10 menit. Jangan bagikan kode ini kepada siapapun.</p>
+  </div>`;
+  const transporter = getMailTransporter();
+  if (!transporter) {
+    console.log(`[OTP DEV] ${email}: ${code}`);
+    return;
+  }
+  await transporter.sendMail({
+    from: "infohepishopping@gmail.com",
+    to: email,
+    subject,
+    html
+  });
+};
+
+const createAndSendOtp = async (userId, email, name) => {
+  const code = generateOtp();
+  const expires = new Date(Date.now() + 10 * 60 * 1000);
+  await db.query('UPDATE otp_codes SET used = 1 WHERE user_id = ? AND used = 0', [userId]);
+  await db.query('INSERT INTO otp_codes (user_id, code, expires_at) VALUES (?, ?, ?)', [userId, code, expires]);
+  await sendOtpEmail(email, name, code);
+};
+
+const maskEmail = (email = '') => {
+  const [user, domain] = email.split('@');
+  if (!domain) return email;
+  const visible = user.slice(0, 2);
+  return `${visible}${'*'.repeat(Math.max(user.length - 2, 1))}@${domain}`;
+};
+
+const hasStoreSetup = (user) => !!(user.store_address && user.store_origin_id);
 
 const paginate = (req) => {
   const page = Math.max(1, parseInt(req.query.page) || 1);
@@ -197,20 +253,22 @@ const releaseSellerPayout = async (conn, order) => {
 
 app.post('/api/auth/register', async (req, res) => {
   try {
-    const { username, password, name, email, phone, role } = req.body;
-    if (!username || !password || !name) {
-      return res.status(400).json({ success: false, message: 'Username, password, dan nama wajib diisi.' });
+    const { username, password, name, email, phone } = req.body;
+    if (!username || !password || !name || !email) {
+      return res.status(400).json({ success: false, message: 'Username, password, nama, dan email wajib diisi.' });
     }
-    const userRole = role === 'seller' ? 'seller' : 'pembeli';
-    const [existing] = await db.query('SELECT id FROM users WHERE username = ?', [username]);
-    if (existing.length) return res.status(400).json({ success: false, message: 'Username sudah digunakan.' });
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ success: false, message: 'Format email tidak valid.' });
+    }
+    const [existing] = await db.query('SELECT id FROM users WHERE username = ? OR email = ?', [username, email]);
+    if (existing.length) return res.status(400).json({ success: false, message: 'Username atau email sudah digunakan.' });
 
     const hash = await bcrypt.hash(password, 10);
     const [result] = await db.query(
-      'INSERT INTO users (username, password, name, email, phone, role, store_name) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [username, hash, name, email || null, phone || null, userRole, userRole === 'seller' ? name : null]
+      'INSERT INTO users (username, password, name, email, phone, role) VALUES (?, ?, ?, ?, ?, ?)',
+      [username, hash, name, email, phone || null, 'pembeli']
     );
-    res.status(201).json({ success: true, message: 'Registrasi berhasil.', data: { id: result.insertId, username, name, role: userRole } });
+    res.status(201).json({ success: true, message: 'Registrasi berhasil.', data: { id: result.insertId, username, name, role: 'pembeli' } });
   } catch (e) {
     console.error(e);
     res.status(500).json({ success: false, message: 'Gagal registrasi.' });
@@ -225,25 +283,73 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Username atau password salah.' });
     }
     const u = users[0];
+    if (!u.email) return res.status(400).json({ success: false, message: 'Akun belum memiliki email. Hubungi admin.' });
+    await createAndSendOtp(u.id, u.email, u.name);
+    res.json({
+      success: true,
+      requires_otp: true,
+      message: 'Kode OTP telah dikirim ke email Anda.',
+      data: { email_hint: maskEmail(u.email), username: u.username }
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ success: false, message: 'Gagal login.' });
+  }
+});
+
+app.post('/api/auth/verify-otp', async (req, res) => {
+  try {
+    const { username, code } = req.body;
+    if (!username || !code) return res.status(400).json({ success: false, message: 'Username dan kode OTP wajib.' });
+    const [users] = await db.query('SELECT * FROM users WHERE username = ? AND is_active = 1', [username]);
+    if (!users.length) return res.status(400).json({ success: false, message: 'User tidak ditemukan.' });
+    const u = users[0];
+    const [otps] = await db.query(
+      'SELECT * FROM otp_codes WHERE user_id = ? AND code = ? AND used = 0 AND expires_at > NOW() ORDER BY id DESC LIMIT 1',
+      [u.id, String(code).trim()]
+    );
+    if (!otps.length) return res.status(400).json({ success: false, message: 'Kode OTP tidak valid atau sudah kadaluarsa.' });
+    await db.query('UPDATE otp_codes SET used = 1 WHERE id = ?', [otps[0].id]);
     const token = jwt.sign({ id: u.id, username: u.username, name: u.name, role: u.role }, JWT_SECRET, { expiresIn: '7d' });
     res.json({
       success: true, token,
-      data: { id: u.id, username: u.username, name: u.name, role: u.role, balance: parseFloat(u.balance), store_name: u.store_name }
+      data: {
+        id: u.id, username: u.username, name: u.name, role: u.role,
+        balance: parseFloat(u.balance), store_name: u.store_name,
+        store_setup_complete: hasStoreSetup(u)
+      }
     });
   } catch (e) {
-    res.status(500).json({ success: false, message: 'Gagal login.' });
+    console.error(e);
+    res.status(500).json({ success: false, message: 'Gagal verifikasi OTP.' });
+  }
+});
+
+app.post('/api/auth/resend-otp', async (req, res) => {
+  try {
+    const { username, password } = req.body;
+    const [users] = await db.query('SELECT * FROM users WHERE username = ? AND is_active = 1', [username]);
+    if (!users.length || !(await bcrypt.compare(password, users[0].password))) {
+      return res.status(400).json({ success: false, message: 'Username atau password salah.' });
+    }
+    const u = users[0];
+    await createAndSendOtp(u.id, u.email, u.name);
+    res.json({ success: true, message: 'Kode OTP baru telah dikirim.', data: { email_hint: maskEmail(u.email) } });
+  } catch (e) {
+    res.status(500).json({ success: false, message: 'Gagal mengirim ulang OTP.' });
   }
 });
 
 app.get('/api/auth/profile', authenticateToken, async (req, res) => {
   try {
     const [users] = await db.query(
-      'SELECT id, username, name, email, phone, role, balance, store_name, store_description, store_address, store_origin_id, avatar, created_at FROM users WHERE id = ?',
+      'SELECT id, username, name, email, phone, role, balance, store_name, store_description, store_address, store_origin_id, store_origin_label, avatar, created_at FROM users WHERE id = ?',
       [req.user.id]
     );
     if (!users.length) return res.status(404).json({ success: false, message: 'User tidak ditemukan.' });
     const u = users[0];
     u.balance = parseFloat(u.balance);
+    u.store_setup_complete = hasStoreSetup(u);
     res.json({ success: true, data: u });
   } catch (e) {
     res.status(500).json({ success: false, message: 'Gagal mengambil profil.' });
@@ -252,10 +358,20 @@ app.get('/api/auth/profile', authenticateToken, async (req, res) => {
 
 app.put('/api/auth/profile', authenticateToken, async (req, res) => {
   try {
-    const { name, email, phone, store_name, store_description, store_address, store_origin_id } = req.body;
+    const { name, email, phone, store_name, store_description, store_address, store_origin_id, store_origin_label } = req.body;
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ success: false, message: 'Format email tidak valid.' });
+    }
+    if (store_origin_id !== undefined || store_address !== undefined) {
+      if (!store_address?.trim() || !store_origin_id) {
+        return res.status(400).json({ success: false, message: 'Alamat toko dan lokasi pengiriman wajib diisi.' });
+      }
+    }
+    const [current] = await db.query('SELECT email FROM users WHERE id = ?', [req.user.id]);
+    const finalEmail = email || current[0]?.email;
     await db.query(
-      'UPDATE users SET name=?, email=?, phone=?, store_name=?, store_description=?, store_address=?, store_origin_id=? WHERE id=?',
-      [name, email, phone, store_name, store_description, store_address, store_origin_id, req.user.id]
+      'UPDATE users SET name=?, email=?, phone=?, store_name=?, store_description=?, store_address=?, store_origin_id=?, store_origin_label=? WHERE id=?',
+      [name, finalEmail, phone, store_name, store_description, store_address, store_origin_id || null, store_origin_label || null, req.user.id]
     );
     res.json({ success: true, message: 'Profil diperbarui.' });
   } catch (e) {
@@ -419,6 +535,17 @@ const saveProduct = async (req, res, isUpdate = false) => {
       return res.status(400).json({ success: false, message: 'Nama produk dan minimal 1 variant wajib.' });
     }
 
+    if (!isUpdate && req.user.role !== 'admin') {
+      const [seller] = await conn.query('SELECT store_address, store_origin_id FROM users WHERE id = ?', [req.user.id]);
+      if (!seller.length || !seller[0].store_address || !seller[0].store_origin_id) {
+        return res.status(400).json({
+          success: false,
+          message: 'Lengkapi alamat toko di Pengaturan Toko terlebih dahulu.',
+          code: 'STORE_SETUP_REQUIRED'
+        });
+      }
+    }
+
     const sellerId = req.user.role === 'admin' && req.body.seller_id ? req.body.seller_id : req.user.id;
     const slug = slugify(name);
     let productId = req.params.id;
@@ -426,7 +553,7 @@ const saveProduct = async (req, res, isUpdate = false) => {
     if (isUpdate) {
       const [existing] = await conn.query('SELECT seller_id FROM products WHERE id = ?', [productId]);
       if (!existing.length) return res.status(404).json({ success: false, message: 'Produk tidak ditemukan.' });
-      if (req.user.role === 'seller' && existing[0].seller_id !== req.user.id) {
+      if (req.user.role !== 'admin' && existing[0].seller_id !== req.user.id) {
         return res.status(403).json({ success: false, message: 'Bukan produk Anda.' });
       }
       await conn.query(
@@ -488,7 +615,7 @@ const saveProduct = async (req, res, isUpdate = false) => {
   }
 };
 
-app.get('/api/seller/products', authenticateToken, authorizeRoles('seller', 'admin'), async (req, res) => {
+app.get('/api/seller/products', authenticateToken, authorizeRoles(...MEMBER_ROLES, 'admin'), async (req, res) => {
   const { page, limit, offset, search } = paginate(req);
   const sellerId = req.user.role === 'admin' && req.query.seller_id ? req.query.seller_id : req.user.id;
   let q = 'SELECT p.*, c.name as category_name FROM products p LEFT JOIN categories c ON p.category_id = c.id WHERE p.seller_id = ?';
@@ -502,10 +629,10 @@ app.get('/api/seller/products', authenticateToken, authorizeRoles('seller', 'adm
   res.json(paginationResponse(rows, page, limit, total));
 });
 
-app.get('/api/seller/products/:id', authenticateToken, authorizeRoles('seller', 'admin'), async (req, res) => {
+app.get('/api/seller/products/:id', authenticateToken, authorizeRoles(...MEMBER_ROLES, 'admin'), async (req, res) => {
   const [products] = await db.query('SELECT * FROM products WHERE id = ?', [req.params.id]);
   if (!products.length) return res.status(404).json({ success: false, message: 'Produk tidak ditemukan.' });
-  if (req.user.role === 'seller' && products[0].seller_id !== req.user.id) {
+  if (req.user.role !== 'admin' && products[0].seller_id !== req.user.id) {
     return res.status(403).json({ success: false, message: 'Bukan produk Anda.' });
   }
   const product = products[0];
@@ -516,13 +643,13 @@ app.get('/api/seller/products/:id', authenticateToken, authorizeRoles('seller', 
   res.json({ success: true, data: product });
 });
 
-app.post('/api/seller/products', authenticateToken, authorizeRoles('seller', 'admin'), saveProduct);
-app.put('/api/seller/products/:id', authenticateToken, authorizeRoles('seller', 'admin'), (req, res) => saveProduct(req, res, true));
+app.post('/api/seller/products', authenticateToken, authorizeRoles(...MEMBER_ROLES, 'admin'), saveProduct);
+app.put('/api/seller/products/:id', authenticateToken, authorizeRoles(...MEMBER_ROLES, 'admin'), (req, res) => saveProduct(req, res, true));
 
-app.delete('/api/seller/products/:id', authenticateToken, authorizeRoles('seller', 'admin'), async (req, res) => {
+app.delete('/api/seller/products/:id', authenticateToken, authorizeRoles(...MEMBER_ROLES, 'admin'), async (req, res) => {
   const [p] = await db.query('SELECT seller_id FROM products WHERE id = ?', [req.params.id]);
   if (!p.length) return res.status(404).json({ success: false, message: 'Produk tidak ditemukan.' });
-  if (req.user.role === 'seller' && p[0].seller_id !== req.user.id) return res.status(403).json({ success: false, message: 'Bukan produk Anda.' });
+  if (req.user.role !== 'admin' && p[0].seller_id !== req.user.id) return res.status(403).json({ success: false, message: 'Bukan produk Anda.' });
   await db.query('DELETE FROM products WHERE id = ?', [req.params.id]);
   res.json({ success: true, message: 'Produk dihapus.' });
 });
@@ -540,15 +667,41 @@ app.get('/api/shipping/destination', async (req, res) => {
   }
 });
 
+app.get('/api/shipping/sellers-info', async (req, res) => {
+  try {
+    const ids = String(req.query.ids || '').split(',').map(id => parseInt(id)).filter(Boolean);
+    if (!ids.length) return res.json({ success: true, data: {} });
+    const [rows] = await db.query(
+      `SELECT id, store_name, store_origin_id, store_origin_label FROM users WHERE id IN (?)`,
+      [ids]
+    );
+    const data = {};
+    rows.forEach(r => {
+      data[r.id] = {
+        store_name: r.store_name,
+        has_origin: !!r.store_origin_id,
+        store_origin_label: r.store_origin_label
+      };
+    });
+    res.json({ success: true, data });
+  } catch (e) {
+    res.status(500).json({ success: false, message: 'Gagal mengambil info seller.' });
+  }
+});
+
 app.post('/api/shipping/cost', async (req, res) => {
   try {
     const { destination, weight, origin, seller_id } = req.body;
     if (!destination) return res.status(400).json({ success: false, message: 'Destinasi wajib.' });
-    let originId = origin || SHIPPING_ORIGIN;
+    let originId = origin || null;
     if (seller_id) {
       const [s] = await db.query('SELECT store_origin_id FROM users WHERE id = ?', [seller_id]);
-      if (s.length && s[0].store_origin_id) originId = s[0].store_origin_id;
+      if (!s.length || !s[0].store_origin_id) {
+        return res.json({ success: true, shipping_available: false, data: [] });
+      }
+      originId = s[0].store_origin_id;
     }
+    if (!originId) originId = SHIPPING_ORIGIN;
     const result = await komercePost({
       origin: String(originId),
       destination: String(destination),
@@ -556,7 +709,7 @@ app.post('/api/shipping/cost', async (req, res) => {
       courier: 'jne:sicepat:ide:sap:jnt:ninja:tiki:lion:anteraja:pos',
       price: 'lowest'
     });
-    res.json({ success: true, data: result.data || [] });
+    res.json({ success: true, shipping_available: true, data: result.data || [] });
   } catch (e) {
     res.status(500).json({ success: false, message: 'Gagal hitung ongkir.' });
   }
@@ -564,7 +717,7 @@ app.post('/api/shipping/cost', async (req, res) => {
 
 // ============ ORDERS ============
 
-app.post('/api/orders', authenticateToken, authorizeRoles('pembeli'), async (req, res) => {
+app.post('/api/orders', authenticateToken, authorizeRoles(...MEMBER_ROLES), async (req, res) => {
   const conn = await db.getConnection();
   try {
     await conn.beginTransaction();
@@ -603,9 +756,18 @@ app.post('/api/orders', authenticateToken, authorizeRoles('pembeli'), async (req
     let totalAll = 0;
 
     for (const [sellerId, group] of Object.entries(groups)) {
+      const [sellerRows] = await conn.query('SELECT store_origin_id FROM users WHERE id = ?', [sellerId]);
+      const sellerHasOrigin = !!(sellerRows[0]?.store_origin_id);
       const shipOpt = shipping_options?.[sellerId] || {};
-      const shipCost = parseFloat(shipOpt.cost ?? shipping_cost) || 0;
-      const isCod = payType === 'cod' || shipping_cod;
+      const shipCost = sellerHasOrigin ? (parseFloat(shipOpt.cost ?? shipping_cost) || 0) : 0;
+      const isCod = payType === 'cod' || shipping_cod || !sellerHasOrigin;
+
+      if (!sellerHasOrigin && payType === 'balance') {
+        throw new Error(`Toko tidak mendukung pengiriman dengan saldo. Gunakan COD untuk produk dari toko ini.`);
+      }
+      if (sellerHasOrigin && payType !== 'cod' && !shipping_cod && !shipOpt.cost && shipOpt.cost !== 0) {
+        throw new Error('Ongkir belum dihitung untuk semua toko.');
+      }
       const orderTotal = group.productTotal + shipCost;
       totalAll += orderTotal;
 
@@ -673,8 +835,8 @@ const getOrdersHandler = async (req, res, roleFilter) => {
   res.json(paginationResponse(rows, page, limit, total));
 };
 
-app.get('/api/orders', authenticateToken, authorizeRoles('pembeli'), (req, res) => getOrdersHandler(req, res, 'pembeli'));
-app.get('/api/seller/orders', authenticateToken, authorizeRoles('seller'), (req, res) => getOrdersHandler(req, res, 'seller'));
+app.get('/api/orders', authenticateToken, authorizeRoles(...MEMBER_ROLES), (req, res) => getOrdersHandler(req, res, 'pembeli'));
+app.get('/api/seller/orders', authenticateToken, authorizeRoles(...MEMBER_ROLES), (req, res) => getOrdersHandler(req, res, 'seller'));
 app.get('/api/admin/orders', authenticateToken, authorizeRoles('admin'), (req, res) => getOrdersHandler(req, res, 'admin'));
 
 app.get('/api/orders/:id', authenticateToken, async (req, res) => {
@@ -685,14 +847,13 @@ app.get('/api/orders/:id', authenticateToken, async (req, res) => {
   );
   if (!orders.length) return res.status(404).json({ success: false, message: 'Order tidak ditemukan.' });
   const order = orders[0];
-  if (req.user.role === 'pembeli' && order.buyer_id !== req.user.id) return res.status(403).json({ success: false, message: 'Akses ditolak.' });
-  if (req.user.role === 'seller' && order.seller_id !== req.user.id) return res.status(403).json({ success: false, message: 'Akses ditolak.' });
+  if (isMember(req.user.role) && order.buyer_id !== req.user.id && order.seller_id !== req.user.id) return res.status(403).json({ success: false, message: 'Akses ditolak.' });
   const [items] = await db.query('SELECT * FROM order_items WHERE order_id = ?', [order.id]);
   order.items = items;
   res.json({ success: true, data: order });
 });
 
-app.patch('/api/orders/:id/status', authenticateToken, authorizeRoles('seller', 'admin'), async (req, res) => {
+app.patch('/api/orders/:id/status', authenticateToken, authorizeRoles(...MEMBER_ROLES, 'admin'), async (req, res) => {
   const conn = await db.getConnection();
   try {
     await conn.beginTransaction();
@@ -703,7 +864,7 @@ app.patch('/api/orders/:id/status', authenticateToken, authorizeRoles('seller', 
     const [orders] = await conn.query('SELECT * FROM orders WHERE id = ? FOR UPDATE', [req.params.id]);
     if (!orders.length) return res.status(404).json({ success: false, message: 'Order tidak ditemukan.' });
     const order = orders[0];
-    if (req.user.role === 'seller' && order.seller_id !== req.user.id) return res.status(403).json({ success: false, message: 'Akses ditolak.' });
+    if (req.user.role !== 'admin' && order.seller_id !== req.user.id) return res.status(403).json({ success: false, message: 'Akses ditolak.' });
 
     if (status === 'cancelled' && !['delivered', 'completed', 'cancelled'].includes(order.status)) {
       const [items] = await conn.query('SELECT * FROM order_items WHERE order_id = ?', [order.id]);
@@ -732,7 +893,7 @@ app.patch('/api/orders/:id/status', authenticateToken, authorizeRoles('seller', 
 });
 
 // Seller dashboard stats
-app.get('/api/seller/dashboard', authenticateToken, authorizeRoles('seller'), async (req, res) => {
+app.get('/api/seller/dashboard', authenticateToken, authorizeRoles(...MEMBER_ROLES), async (req, res) => {
   const sellerId = req.user.id;
   const [[rev]] = await db.query(
     `SELECT COALESCE(SUM(product_total),0) as total_revenue, COUNT(*) as total_orders
@@ -774,7 +935,7 @@ app.get('/api/payment-methods', async (req, res) => {
   res.json({ success: true, data: rows });
 });
 
-app.post('/api/topup', authenticateToken, authorizeRoles('pembeli'), upload.single('proof'), async (req, res) => {
+app.post('/api/topup', authenticateToken, authorizeRoles(...MEMBER_ROLES), upload.single('proof'), async (req, res) => {
   const { amount } = req.body;
   const amt = parseFloat(amount);
   if (!amt || amt < 10000) return res.status(400).json({ success: false, message: 'Minimum topup Rp 10.000.' });
@@ -783,7 +944,7 @@ app.post('/api/topup', authenticateToken, authorizeRoles('pembeli'), upload.sing
   res.status(201).json({ success: true, message: 'Permintaan topup dikirim. Menunggu konfirmasi admin.' });
 });
 
-app.get('/api/topup', authenticateToken, authorizeRoles('pembeli'), async (req, res) => {
+app.get('/api/topup', authenticateToken, authorizeRoles(...MEMBER_ROLES), async (req, res) => {
   const { page, limit, offset } = paginate(req);
   const [rows] = await db.query('SELECT * FROM topup_requests WHERE user_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?', [req.user.id, limit, offset]);
   const [[{ total }]] = await db.query('SELECT COUNT(*) as total FROM topup_requests WHERE user_id = ?', [req.user.id]);
@@ -904,15 +1065,15 @@ app.get('/api/admin/dashboard', authenticateToken, authorizeRoles('admin'), asyn
 // ============ CHAT ============
 
 app.get('/api/chat/conversations', authenticateToken, async (req, res) => {
-  const isSeller = req.user.role === 'seller';
-  const q = isSeller
+  const asSeller = req.query.as === 'seller';
+  const q = asSeller
     ? `SELECT c.*, u.name as partner_name, u.avatar as partner_avatar FROM chat_conversations c JOIN users u ON c.buyer_id = u.id WHERE c.seller_id = ? ORDER BY c.last_message_at DESC`
     : `SELECT c.*, u.store_name as partner_name, u.avatar as partner_avatar FROM chat_conversations c JOIN users u ON c.seller_id = u.id WHERE c.buyer_id = ? ORDER BY c.last_message_at DESC`;
   const [rows] = await db.query(q, [req.user.id]);
   res.json({ success: true, data: rows });
 });
 
-app.post('/api/chat/conversations', authenticateToken, authorizeRoles('pembeli'), async (req, res) => {
+app.post('/api/chat/conversations', authenticateToken, authorizeRoles(...MEMBER_ROLES), async (req, res) => {
   const { seller_id, product_id } = req.body;
   if (!seller_id) return res.status(400).json({ success: false, message: 'Seller wajib.' });
   const [existing] = await db.query('SELECT * FROM chat_conversations WHERE buyer_id = ? AND seller_id = ?', [req.user.id, seller_id]);

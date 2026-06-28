@@ -11,14 +11,14 @@ export default function SellerChat() {
   const [activeId, setActiveId] = useState(null);
 
   useEffect(() => {
-    get(API_ENDPOINTS.CHAT.CONVERSATIONS).then(res => {
+    get(API_ENDPOINTS.CHAT.CONVERSATIONS, { as: 'seller' }).then(res => {
       setConversations(res.data || []);
       if (res.data?.length) setActiveId(res.data[0].id);
     });
   }, []);
 
   return (
-    <DashboardLayout role="seller" title="Chat Pembeli">
+    <DashboardLayout role="store" title="Chat Pembeli">
       <div className="grid gap-4 lg:grid-cols-3">
         <div className="card max-h-[560px] overflow-y-auto p-2">
           {conversations.map(c => (

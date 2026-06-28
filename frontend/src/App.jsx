@@ -16,6 +16,7 @@ import SellerDashboard from './pages/seller/SellerDashboard';
 import SellerProducts from './pages/seller/SellerProducts';
 import SellerOrders from './pages/seller/SellerOrders';
 import SellerChat from './pages/seller/SellerChat';
+import StoreSettings from './pages/seller/StoreSettings';
 import AdminDashboard from './pages/admin/AdminDashboard';
 import AdminUsers from './pages/admin/AdminUsers';
 import AdminOrders from './pages/admin/AdminOrders';
@@ -26,13 +27,17 @@ import AdminCategories from './pages/admin/AdminCategories';
 import AdminSettings from './pages/admin/AdminSettings';
 import LoadingSpinner from './components/ui/LoadingSpinner';
 
+const MEMBER_ROLES = ['pembeli', 'seller'];
+
 function ProtectedRoute({ children, roles }) {
   const { user, loading } = useAuth();
   const location = useLocation();
   if (loading) return <LoadingSpinner />;
   if (!user) return <Navigate to="/login" state={{ from: location }} replace />;
   if (roles && !roles.includes(user.role)) {
-    return <Navigate to="/login" state={{ from: location, requireRole: 'pembeli' }} replace />;
+    if (user.role === 'admin' && roles.includes('admin')) return children;
+    if (MEMBER_ROLES.includes(user.role) && roles.some(r => MEMBER_ROLES.includes(r))) return children;
+    return <Navigate to="/login" state={{ from: location }} replace />;
   }
   return children;
 }
@@ -48,18 +53,19 @@ export default function App() {
             <Route path="/products" element={<Products />} />
             <Route path="/products/:id" element={<ProductDetail />} />
             <Route path="/cart" element={<Cart />} />
-            <Route path="/checkout" element={<ProtectedRoute roles={['pembeli']}><Checkout /></ProtectedRoute>} />
+            <Route path="/checkout" element={<ProtectedRoute roles={MEMBER_ROLES}><Checkout /></ProtectedRoute>} />
             <Route path="/login" element={<Login />} />
             <Route path="/register" element={<Register />} />
 
-            <Route path="/buyer/orders" element={<ProtectedRoute roles={['pembeli']}><BuyerOrders /></ProtectedRoute>} />
-            <Route path="/buyer/balance" element={<ProtectedRoute roles={['pembeli']}><BuyerBalance /></ProtectedRoute>} />
-            <Route path="/buyer/chat" element={<ProtectedRoute roles={['pembeli']}><BuyerChat /></ProtectedRoute>} />
+            <Route path="/buyer/orders" element={<ProtectedRoute roles={MEMBER_ROLES}><BuyerOrders /></ProtectedRoute>} />
+            <Route path="/buyer/balance" element={<ProtectedRoute roles={MEMBER_ROLES}><BuyerBalance /></ProtectedRoute>} />
+            <Route path="/buyer/chat" element={<ProtectedRoute roles={MEMBER_ROLES}><BuyerChat /></ProtectedRoute>} />
 
-            <Route path="/seller" element={<ProtectedRoute roles={['seller']}><SellerDashboard /></ProtectedRoute>} />
-            <Route path="/seller/products" element={<ProtectedRoute roles={['seller']}><SellerProducts /></ProtectedRoute>} />
-            <Route path="/seller/orders" element={<ProtectedRoute roles={['seller']}><SellerOrders /></ProtectedRoute>} />
-            <Route path="/seller/chat" element={<ProtectedRoute roles={['seller']}><SellerChat /></ProtectedRoute>} />
+            <Route path="/seller" element={<ProtectedRoute roles={MEMBER_ROLES}><SellerDashboard /></ProtectedRoute>} />
+            <Route path="/seller/products" element={<ProtectedRoute roles={MEMBER_ROLES}><SellerProducts /></ProtectedRoute>} />
+            <Route path="/seller/orders" element={<ProtectedRoute roles={MEMBER_ROLES}><SellerOrders /></ProtectedRoute>} />
+            <Route path="/seller/chat" element={<ProtectedRoute roles={MEMBER_ROLES}><SellerChat /></ProtectedRoute>} />
+            <Route path="/seller/settings" element={<ProtectedRoute roles={MEMBER_ROLES}><StoreSettings /></ProtectedRoute>} />
 
             <Route path="/admin" element={<ProtectedRoute roles={['admin']}><AdminDashboard /></ProtectedRoute>} />
             <Route path="/admin/users" element={<ProtectedRoute roles={['admin']}><AdminUsers /></ProtectedRoute>} />

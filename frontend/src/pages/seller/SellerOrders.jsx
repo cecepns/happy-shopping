@@ -36,7 +36,7 @@ export default function SellerOrders() {
   };
 
   return (
-    <DashboardLayout role="seller" title="Pesanan">
+    <DashboardLayout role="store" title="Pesanan">
       <input className="input-field mb-4 max-w-sm" placeholder="Cari order..." value={search} onChange={e => setSearch(e.target.value)} />
       {loading ? <LoadingSpinner /> : (
         <>

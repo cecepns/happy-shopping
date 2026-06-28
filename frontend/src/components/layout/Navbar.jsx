@@ -1,9 +1,11 @@
 import { Link, useNavigate } from 'react-router-dom';
-import { ShoppingBag, Menu, X, MessageCircle, Wallet, LayoutDashboard, LogOut } from 'lucide-react';
+import { ShoppingBag, Menu, X, MessageCircle, Wallet, Store, LogOut } from 'lucide-react';
 import { useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { useCart } from '../../context/CartContext';
 import logo from '../../assets/logo.png';
+
+const MEMBER_ROLES = ['pembeli', 'seller'];
 
 export default function Navbar() {
   const { user, logout } = useAuth();
@@ -11,7 +13,7 @@ export default function Navbar() {
   const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = useState(false);
 
-  const dashLink = user?.role === 'admin' ? '/admin' : user?.role === 'seller' ? '/seller' : user ? '/buyer/orders' : null;
+  const isMember = user && MEMBER_ROLES.includes(user.role);
 
   return (
     <header className="sticky top-0 z-40 border-b border-primary-100 bg-white/95 backdrop-blur-md">
@@ -22,11 +24,15 @@ export default function Navbar() {
 
         <nav className="hidden items-center gap-6 md:flex">
           <Link to="/products" className="text-sm font-medium text-gray-600 transition hover:text-primary-600">Produk</Link>
-          {user?.role === 'pembeli' && (
+          {isMember && (
             <>
+              <Link to="/seller" className="text-sm font-medium text-gray-600 transition hover:text-primary-600">Toko Saya</Link>
               <Link to="/buyer/balance" className="text-sm font-medium text-gray-600 transition hover:text-primary-600">Saldo</Link>
               <Link to="/buyer/chat" className="text-sm font-medium text-gray-600 transition hover:text-primary-600">Chat</Link>
             </>
+          )}
+          {user?.role === 'admin' && (
+            <Link to="/admin" className="text-sm font-medium text-gray-600 transition hover:text-primary-600">Admin</Link>
           )}
         </nav>
 
@@ -42,9 +48,9 @@ export default function Navbar() {
 
           {user ? (
             <div className="hidden items-center gap-2 md:flex">
-              {dashLink && (
-                <Link to={dashLink} className="btn-secondary !py-2 !px-3 text-xs">
-                  <LayoutDashboard size={14} /> Dashboard
+              {isMember && (
+                <Link to="/buyer/orders" className="btn-secondary !py-2 !px-3 text-xs">
+                  <Wallet size={14} /> Pesanan
                 </Link>
               )}
               <span className="text-sm text-gray-600">{user.name}</span>
@@ -69,13 +75,15 @@ export default function Navbar() {
         <div className="border-t border-primary-100 bg-white px-4 py-4 md:hidden">
           <div className="flex flex-col gap-3">
             <Link to="/products" onClick={() => setMenuOpen(false)} className="text-sm font-medium text-gray-700">Produk</Link>
-            {user?.role === 'pembeli' && (
+            {isMember && (
               <>
+                <Link to="/seller" onClick={() => setMenuOpen(false)} className="flex items-center gap-2 text-sm text-gray-700"><Store size={16} /> Toko Saya</Link>
+                <Link to="/buyer/orders" onClick={() => setMenuOpen(false)} className="flex items-center gap-2 text-sm text-gray-700"><Wallet size={16} /> Pesanan</Link>
                 <Link to="/buyer/balance" onClick={() => setMenuOpen(false)} className="flex items-center gap-2 text-sm text-gray-700"><Wallet size={16} /> Saldo</Link>
                 <Link to="/buyer/chat" onClick={() => setMenuOpen(false)} className="flex items-center gap-2 text-sm text-gray-700"><MessageCircle size={16} /> Chat</Link>
               </>
             )}
-            {dashLink && <Link to={dashLink} onClick={() => setMenuOpen(false)} className="text-sm font-medium text-gray-700">Dashboard</Link>}
+            {user?.role === 'admin' && <Link to="/admin" onClick={() => setMenuOpen(false)} className="text-sm font-medium text-gray-700">Admin</Link>}
             {!user ? (
               <>
                 <Link to="/login" onClick={() => setMenuOpen(false)} className="btn-secondary">Masuk</Link>

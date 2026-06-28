@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { Loader2, Minus, Plus } from 'lucide-react';
@@ -22,21 +22,36 @@ export default function Checkout() {
   const [destinations, setDestinations] = useState([]);
   const [selectedDest, setSelectedDest] = useState(null);
   const [shippingOptions, setShippingOptions] = useState({});
+  const [sellerInfo, setSellerInfo] = useState({});
   const [loadingShip, setLoadingShip] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const debouncedDest = useDebounce(destSearch, 300);
 
-  const sellerGroups = items.reduce((acc, item) => {
+  const sellerGroups = useMemo(() => items.reduce((acc, item) => {
     if (!acc[item.seller_id]) acc[item.seller_id] = { items: [], weight: 0, name: item.seller_name };
     acc[item.seller_id].items.push(item);
     acc[item.seller_id].weight += (item.weight || 100) * item.quantity;
     return acc;
-  }, {});
+  }, {}), [items]);
+
+  const sellerIds = useMemo(() => Object.keys(sellerGroups), [sellerGroups]);
+  const hasCodOnlySeller = sellerIds.some(id => sellerInfo[id] && !sellerInfo[id].has_origin);
+  const canUseBalance = !hasCodOnlySeller;
 
   useEffect(() => {
     if (!items.length) navigate('/cart');
     else if (user) setForm(f => ({ ...f, recipient_name: user.name || '', recipient_phone: user.phone || '' }));
   }, [user, items, navigate]);
+
+  useEffect(() => {
+    if (!sellerIds.length) return;
+    get(API_ENDPOINTS.SHIPPING.SELLERS_INFO, { ids: sellerIds.join(',') })
+      .then(res => setSellerInfo(res.data || {}));
+  }, [sellerIds.join(',')]);
+
+  useEffect(() => {
+    if (hasCodOnlySeller) setPaymentType('cod');
+  }, [hasCodOnlySeller]);
 
   useEffect(() => {
     if (debouncedDest.length >= 3) {
@@ -48,20 +63,35 @@ export default function Checkout() {
     if (!selectedDest) return;
     setLoadingShip(true);
     const opts = {};
-    Promise.all(Object.entries(sellerGroups).map(async ([sellerId, group]) => {
+    Promise.all(sellerIds.map(async (sellerId) => {
+      if (!sellerInfo[sellerId]?.has_origin) {
+        opts[sellerId] = { cod_only: true, cost: 0, courier: 'COD', service: 'Tanpa ongkir', etd: '-' };
+        return;
+      }
+      const group = sellerGroups[sellerId];
       const res = await post(API_ENDPOINTS.SHIPPING.COST, { destination: selectedDest.id, weight: group.weight, seller_id: sellerId });
+      if (res.shipping_available === false) {
+        opts[sellerId] = { cod_only: true, cost: 0, courier: 'COD', service: 'Tanpa ongkir', etd: '-' };
+        return;
+      }
       const cheapest = (res.data || [])[0];
       if (cheapest) opts[sellerId] = { cost: cheapest.cost, courier: cheapest.code, service: cheapest.service, etd: cheapest.etd };
     })).then(() => { setShippingOptions(opts); setLoadingShip(false); });
-  }, [selectedDest, items]);
+  }, [selectedDest, items, sellerInfo, sellerIds.join(',')]);
 
   const totalShipping = Object.values(shippingOptions).reduce((s, o) => s + (parseFloat(o.cost) || 0), 0);
   const grandTotal = total + totalShipping;
 
+  const shippingReady = sellerIds.every(id => {
+    if (!sellerInfo[id]?.has_origin) return true;
+    return !!shippingOptions[id];
+  });
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!selectedDest) return toast.error('Pilih kota tujuan');
-    if (Object.keys(shippingOptions).length !== Object.keys(sellerGroups).length) return toast.error('Menghitung ongkir...');
+    if (!shippingReady) return toast.error('Menghitung ongkir...');
+    if (hasCodOnlySeller && paymentType === 'balance') return toast.error('Beberapa toko hanya mendukung COD');
     setSubmitting(true);
     try {
       await post(API_ENDPOINTS.ORDERS.CREATE, {
@@ -110,19 +140,32 @@ export default function Checkout() {
               {selectedDest && <p className="mt-2 text-sm text-green-600">✓ {selectedDest.label}</p>}
               {loadingShip && <p className="mt-2 text-sm text-gray-500"><Loader2 className="inline animate-spin" size={14} /> Menghitung ongkir...</p>}
               {Object.entries(shippingOptions).map(([sid, opt]) => (
-                <p key={sid} className="mt-1 text-sm text-gray-600">{sellerGroups[sid]?.name}: {opt.courier} {opt.service} - {formatCurrency(opt.cost)} ({opt.etd})</p>
+                <p key={sid} className="mt-1 text-sm text-gray-600">
+                  {sellerGroups[sid]?.name}: {opt.cod_only
+                    ? <span className="text-amber-600">COD saja (toko belum set lokasi pengiriman)</span>
+                    : `${opt.courier} ${opt.service} - ${formatCurrency(opt.cost)} (${opt.etd})`}
+                </p>
               ))}
             </div>
 
             <div className="card p-4">
               <h3 className="font-semibold">Metode Pembayaran</h3>
+              {hasCodOnlySeller && (
+                <p className="mt-2 rounded-lg bg-amber-50 p-2 text-xs text-amber-700">
+                  Beberapa toko belum mengatur alamat pengiriman, hanya tersedia COD untuk pesanan tersebut.
+                </p>
+              )}
               <div className="mt-3 space-y-2">
-                {['balance', 'cod'].map(type => (
-                  <label key={type} className={`flex cursor-pointer items-center gap-3 rounded-xl border p-3 ${paymentType === type ? 'border-primary-500 bg-primary-50' : 'border-gray-200'}`}>
-                    <input type="radio" name="payment" value={type} checked={paymentType === type} onChange={() => setPaymentType(type)} />
-                    <span className="text-sm font-medium">{type === 'balance' ? `Saldo (${formatCurrency(user?.balance)})` : 'COD (Bayar di Tempat)'}</span>
+                {canUseBalance && (
+                  <label className={`flex cursor-pointer items-center gap-3 rounded-xl border p-3 ${paymentType === 'balance' ? 'border-primary-500 bg-primary-50' : 'border-gray-200'}`}>
+                    <input type="radio" name="payment" value="balance" checked={paymentType === 'balance'} onChange={() => setPaymentType('balance')} />
+                    <span className="text-sm font-medium">Saldo ({formatCurrency(user?.balance)})</span>
                   </label>
-                ))}
+                )}
+                <label className={`flex cursor-pointer items-center gap-3 rounded-xl border p-3 ${paymentType === 'cod' ? 'border-primary-500 bg-primary-50' : 'border-gray-200'}`}>
+                  <input type="radio" name="payment" value="cod" checked={paymentType === 'cod'} onChange={() => setPaymentType('cod')} />
+                  <span className="text-sm font-medium">COD (Bayar di Tempat)</span>
+                </label>
               </div>
             </div>
           </div>
@@ -136,24 +179,12 @@ export default function Checkout() {
                   <p className="text-xs text-gray-500">{i.model} - {i.variant_name}</p>
                 </div>
                 <div className="flex items-center rounded-lg border border-gray-200">
-                  <button
-                    type="button"
-                    onClick={() => updateQty(i.variant_id, Math.max(1, i.quantity - 1))}
-                    className="p-1.5 text-gray-500 hover:text-primary-600"
-                  >
+                  <button type="button" onClick={() => updateQty(i.variant_id, Math.max(1, i.quantity - 1))} className="p-1.5 text-gray-500 hover:text-primary-600">
                     <Minus size={12} />
                   </button>
-                  <QuantityInput
-                    value={i.quantity}
-                    max={i.stock}
-                    onChange={(qty) => updateQty(i.variant_id, qty)}
-                    className="w-10 border-0 bg-transparent !py-0.5 text-center text-sm shadow-none focus:ring-0"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => updateQty(i.variant_id, Math.min(i.stock, i.quantity + 1))}
-                    className="p-1.5 text-gray-500 hover:text-primary-600"
-                  >
+                  <QuantityInput value={i.quantity} max={i.stock} onChange={(qty) => updateQty(i.variant_id, qty)}
+                    className="w-10 border-0 bg-transparent !py-0.5 text-center text-sm shadow-none focus:ring-0" />
+                  <button type="button" onClick={() => updateQty(i.variant_id, Math.min(i.stock, i.quantity + 1))} className="p-1.5 text-gray-500 hover:text-primary-600">
                     <Plus size={12} />
                   </button>
                 </div>
