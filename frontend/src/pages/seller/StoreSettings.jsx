@@ -55,7 +55,7 @@ export default function StoreSettings() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!form.store_address?.trim()) return toast.error('Alamat toko wajib diisi');
-    if (!form.store_origin_id) return toast.error('Pilih lokasi pengiriman toko');
+    if (!form.store_origin_id) return toast.error('Pilih lokasi pickup toko');
     setSaving(true);
     try {
       await put(API_ENDPOINTS.AUTH.UPDATE_PROFILE, form);
@@ -75,7 +75,7 @@ export default function StoreSettings() {
       <div className="mx-auto max-w-2xl">
         <div className="mb-6 rounded-2xl border border-primary-100 bg-primary-50 p-4 text-sm text-primary-800">
           <p className="font-medium">Alamat toko wajib diisi sebelum memposting produk.</p>
-          <p className="mt-1 text-primary-700">Lokasi pengiriman digunakan sebagai origin ongkir saat pembeli checkout.</p>
+          <p className="mt-1 text-primary-700">Lokasi pickup digunakan sebagai titik pengambilan dan origin ongkir saat pembeli checkout.</p>
         </div>
 
         <form onSubmit={handleSubmit} className="card space-y-4 p-6">
@@ -98,7 +98,7 @@ export default function StoreSettings() {
           </div>
 
           <div>
-            <label className="mb-1 block text-sm font-medium">Lokasi Pengiriman (Origin ID)</label>
+            <label className="mb-1 block text-sm font-medium">Lokasi Pickup</label>
             <input className="input-field" placeholder="Cari kecamatan/kelurahan..." required
               value={originSearch}
               onChange={e => {

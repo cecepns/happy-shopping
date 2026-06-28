@@ -73,15 +73,22 @@ const isStoreOwner = (user, sellerId) => user.role === 'admin' || user.id === se
 
 const generateOtp = () => String(Math.floor(100000 + Math.random() * 900000));
 
-const getMailTransporter = () => {
-  // if (!process.env.SMTP_HOST) return null;
-  return nodemailer.createTransport({
-    host: "smtp.gmail.com",
-    port: parseInt(process.env.SMTP_PORT) || 587,
-    secure: true,
-    auth: { user:"infohepishopping@gmail.com", pass: "pueb yvlg lvsj xsts"}
-  });
+const MAIL_CONFIG = {
+  host: 'smtp.gmail.com',
+  port: 587,
+  secure: false,
+  user: 'infohepishopping@gmail.com',
+  pass: 'puebyvlglvsjxsts',
+  from: 'Happy Shopping <infohepishopping@gmail.com>'
 };
+
+const getMailTransporter = () =>
+  nodemailer.createTransport({
+    host: MAIL_CONFIG.host,
+    port: MAIL_CONFIG.port,
+    secure: MAIL_CONFIG.secure,
+    auth: { user: MAIL_CONFIG.user, pass: MAIL_CONFIG.pass }
+  });
 
 const sendOtpEmail = async (email, name, code) => {
   const subject = 'Kode OTP Login - Happy Shopping';
@@ -92,24 +99,26 @@ const sendOtpEmail = async (email, name, code) => {
     <p style="font-size:32px;font-weight:bold;letter-spacing:8px;color:#4f46e5">${code}</p>
     <p>Kode berlaku 10 menit. Jangan bagikan kode ini kepada siapapun.</p>
   </div>`;
-  const transporter = getMailTransporter();
-  if (!transporter) {
-    console.log(`[OTP DEV] ${email}: ${code}`);
-    return;
+  try {
+    await getMailTransporter().sendMail({
+      from: MAIL_CONFIG.from,
+      to: email,
+      subject,
+      html
+    });
+  } catch (err) {
+    console.error('[OTP EMAIL ERROR]', err.message);
+    console.log(`[OTP FALLBACK] ${email}: ${code}`);
   }
-  await transporter.sendMail({
-    from: "infohepishopping@gmail.com",
-    to: email,
-    subject,
-    html
-  });
 };
 
 const createAndSendOtp = async (userId, email, name) => {
   const code = generateOtp();
-  const expires = new Date(Date.now() + 10 * 60 * 1000);
   await db.query('UPDATE otp_codes SET used = 1 WHERE user_id = ? AND used = 0', [userId]);
-  await db.query('INSERT INTO otp_codes (user_id, code, expires_at) VALUES (?, ?, ?)', [userId, code, expires]);
+  await db.query(
+    'INSERT INTO otp_codes (user_id, code, expires_at) VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 10 MINUTE))',
+    [userId, code]
+  );
   await sendOtpEmail(email, name, code);
 };
 
@@ -121,6 +130,20 @@ const maskEmail = (email = '') => {
 };
 
 const hasStoreSetup = (user) => !!(user.store_address && user.store_origin_id);
+
+const ensureOtpTable = async () => {
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS otp_codes (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      user_id INT NOT NULL,
+      code VARCHAR(6) NOT NULL,
+      expires_at DATETIME NOT NULL,
+      used TINYINT NOT NULL DEFAULT 0,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+};
 
 const paginate = (req) => {
   const page = Math.max(1, parseInt(req.query.page) || 1);
@@ -292,8 +315,11 @@ app.post('/api/auth/login', async (req, res) => {
       data: { email_hint: maskEmail(u.email), username: u.username }
     });
   } catch (e) {
-    console.error(e);
-    res.status(500).json({ success: false, message: 'Gagal login.' });
+    console.error('[LOGIN ERROR]', e);
+    const msg = e.code === 'ER_NO_SUCH_TABLE'
+      ? 'Database belum siap. Hubungi admin.'
+      : 'Gagal mengirim OTP. Silakan coba lagi.';
+    res.status(500).json({ success: false, message: msg });
   }
 });
 
@@ -304,11 +330,19 @@ app.post('/api/auth/verify-otp', async (req, res) => {
     const [users] = await db.query('SELECT * FROM users WHERE username = ? AND is_active = 1', [username]);
     if (!users.length) return res.status(400).json({ success: false, message: 'User tidak ditemukan.' });
     const u = users[0];
+    const otpCode = String(code).replace(/\D/g, '').trim();
+    if (otpCode.length !== 6) {
+      return res.status(400).json({ success: false, message: 'Kode OTP harus 6 digit.' });
+    }
     const [otps] = await db.query(
-      'SELECT * FROM otp_codes WHERE user_id = ? AND code = ? AND used = 0 AND expires_at > NOW() ORDER BY id DESC LIMIT 1',
-      [u.id, String(code).trim()]
+      `SELECT * FROM otp_codes
+       WHERE user_id = ? AND code = ? AND used = 0 AND expires_at > NOW()
+       ORDER BY id DESC LIMIT 1`,
+      [u.id, otpCode]
     );
-    if (!otps.length) return res.status(400).json({ success: false, message: 'Kode OTP tidak valid atau sudah kadaluarsa.' });
+    if (!otps.length) {
+      return res.status(400).json({ success: false, message: 'Kode OTP tidak valid atau sudah kadaluarsa.' });
+    }
     await db.query('UPDATE otp_codes SET used = 1 WHERE id = ?', [otps[0].id]);
     const token = jwt.sign({ id: u.id, username: u.username, name: u.name, role: u.role }, JWT_SECRET, { expiresIn: '7d' });
     res.json({
@@ -1161,4 +1195,11 @@ app.delete('/api/admin/payment-methods/:id', authenticateToken, authorizeRoles('
 
 app.get('/api/health', (_, res) => res.json({ success: true, message: 'Happy Shopping API is running.' }));
 
-app.listen(PORT, () => console.log(`Happy Shopping API running on port ${PORT}`));
+ensureOtpTable()
+  .then(() => {
+    app.listen(PORT, () => console.log(`Happy Shopping API running on port ${PORT}`));
+  })
+  .catch((e) => {
+    console.error('Failed to init database:', e.message);
+    process.exit(1);
+  });

@@ -79,7 +79,10 @@ export default function Checkout() {
     })).then(() => { setShippingOptions(opts); setLoadingShip(false); });
   }, [selectedDest, items, sellerInfo, sellerIds.join(',')]);
 
-  const totalShipping = Object.values(shippingOptions).reduce((s, o) => s + (parseFloat(o.cost) || 0), 0);
+  const isFreeShipping = paymentType !== 'cod';
+  const totalShipping = isFreeShipping
+    ? 0
+    : Object.values(shippingOptions).reduce((s, o) => s + (parseFloat(o.cost) || 0), 0);
   const grandTotal = total + totalShipping;
 
   const shippingReady = sellerIds.every(id => {
@@ -94,13 +97,17 @@ export default function Checkout() {
     if (hasCodOnlySeller && paymentType === 'balance') return toast.error('Beberapa toko hanya mendukung COD');
     setSubmitting(true);
     try {
+      const finalShippingOptions = isFreeShipping
+        ? Object.fromEntries(Object.entries(shippingOptions).map(([sid, opt]) => [sid, { ...opt, cost: 0 }]))
+        : shippingOptions;
+
       await post(API_ENDPOINTS.ORDERS.CREATE, {
         items: items.map(i => ({ product_id: i.product_id, variant_id: i.variant_id, quantity: i.quantity })),
         ...form,
         payment_type: paymentType,
         shipping_cod: paymentType === 'cod',
         destination_id: selectedDest.id,
-        shipping_options: shippingOptions
+        shipping_options: finalShippingOptions
       });
       await refreshProfile();
       clearCart();
@@ -142,8 +149,10 @@ export default function Checkout() {
               {Object.entries(shippingOptions).map(([sid, opt]) => (
                 <p key={sid} className="mt-1 text-sm text-gray-600">
                   {sellerGroups[sid]?.name}: {opt.cod_only
-                    ? <span className="text-amber-600">COD saja (toko belum set lokasi pengiriman)</span>
-                    : `${opt.courier} ${opt.service} - ${formatCurrency(opt.cost)} (${opt.etd})`}
+                    ? <span className="text-amber-600">COD saja (toko belum set lokasi pickup)</span>
+                    : isFreeShipping
+                      ? <span className="text-green-600">{opt.courier} {opt.service} - Gratis ongkir ({opt.etd})</span>
+                      : `${opt.courier} ${opt.service} - ${formatCurrency(opt.cost)} (${opt.etd})`}
                 </p>
               ))}
             </div>
@@ -193,7 +202,9 @@ export default function Checkout() {
             ))}
             <div className="mt-3 space-y-1 border-t pt-3 text-sm">
               <div className="flex justify-between"><span>Subtotal</span><span>{formatCurrency(total)}</span></div>
-              <div className="flex justify-between"><span>Ongkir</span><span>{formatCurrency(totalShipping)}</span></div>
+              {!isFreeShipping && (
+                <div className="flex justify-between"><span>Ongkir</span><span>{formatCurrency(totalShipping)}</span></div>
+              )}
               <div className="flex justify-between text-lg font-bold"><span>Total</span><span className="text-primary-600">{formatCurrency(grandTotal)}</span></div>
             </div>
             <button type="submit" disabled={submitting} className="btn-primary mt-4 w-full">

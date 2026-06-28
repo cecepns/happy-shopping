@@ -6,23 +6,32 @@ import toast from 'react-hot-toast';
 import { uploadFile } from '../../utils/request';
 import { assetUrl } from '../../utils/api';
 
-const emptyVariant = (model = '') => ({
-  model, variant_name: '', stock: 0, price: '', cost_price: '', sku: '', image: '', weight: ''
+const createModel = (name = '') => ({ id: crypto.randomUUID(), name });
+
+const emptyVariant = (modelId = '') => ({
+  modelId, model: '', variant_name: '', stock: 0, price: '', cost_price: '', sku: '', image: '', weight: ''
 });
 
 export default function ProductForm({ initial, onSubmit, saving }) {
+  const defaultModel = createModel();
+  const [models, setModels] = useState([defaultModel]);
+  const [activeModelId, setActiveModelId] = useState(defaultModel.id);
   const [form, setForm] = useState({
-    name: '', description: '', price: '', weight: '100', category_id: '', status: 'active', images: [], variants: [emptyVariant('Model A')]
+    name: '', description: '', price: '', weight: '100', category_id: '', status: 'active', images: [], variants: [emptyVariant(defaultModel.id)]
   });
-  const [models, setModels] = useState(['Model A']);
-  const [activeModel, setActiveModel] = useState('Model A');
   const fileRef = useRef();
 
   useEffect(() => {
     if (initial) {
-      const m = [...new Set((initial.variants || []).map(v => v.model))];
-      setModels(m.length ? m : ['Model A']);
-      setActiveModel(m[0] || 'Model A');
+      const modelNames = [...new Set((initial.variants || []).map(v => v.model ?? ''))];
+      const builtModels = modelNames.length
+        ? modelNames.map(name => createModel(name))
+        : [createModel()];
+      const modelIdByName = Object.fromEntries(builtModels.map(m => [m.name, m.id]));
+      const firstModelId = builtModels[0].id;
+
+      setModels(builtModels);
+      setActiveModelId(firstModelId);
       setForm({
         name: initial.name || '',
         description: initial.description || '',
@@ -32,20 +41,27 @@ export default function ProductForm({ initial, onSubmit, saving }) {
         status: initial.status || 'active',
         images: initial.images || [],
         variants: (initial.variants || []).map(v => ({
-          id: v.id, model: v.model, variant_name: v.variant_name, stock: v.stock,
-          price: String(v.price), cost_price: v.cost_price != null ? String(v.cost_price) : '',
-          sku: v.sku || '', image: v.image || '', weight: v.weight ? String(v.weight) : ''
+          id: v.id,
+          modelId: modelIdByName[v.model ?? ''] || firstModelId,
+          model: v.model || '',
+          variant_name: v.variant_name || '',
+          stock: v.stock,
+          price: String(v.price),
+          cost_price: v.cost_price != null ? String(v.cost_price) : '',
+          sku: v.sku || '',
+          image: v.image || '',
+          weight: v.weight ? String(v.weight) : ''
         }))
       });
     }
   }, [initial]);
 
-  const variantsForModel = form.variants.filter(v => v.model === activeModel);
+  const activeModel = models.find(m => m.id === activeModelId);
+  const variantsForModel = form.variants.filter(v => v.modelId === activeModelId);
 
   const updateVariant = (idx, field, val) => {
-    const globalIdx = form.variants.findIndex((v, i) => v.model === activeModel && form.variants.filter(x => x.model === activeModel).indexOf(v) === idx);
     const realIdx = form.variants.reduce((acc, v, i) => {
-      if (v.model === activeModel) { if (acc.count === idx) acc.idx = i; acc.count++; }
+      if (v.modelId === activeModelId) { if (acc.count === idx) acc.idx = i; acc.count++; }
       return acc;
     }, { count: 0, idx: -1 }).idx;
     setForm(f => {
@@ -55,21 +71,38 @@ export default function ProductForm({ initial, onSubmit, saving }) {
     });
   };
 
-  const addVariant = () => setForm(f => ({ ...f, variants: [...f.variants, emptyVariant(activeModel)] }));
+  const addVariant = () => setForm(f => ({ ...f, variants: [...f.variants, emptyVariant(activeModelId)] }));
 
   const removeVariant = (idx) => {
     const realIdx = form.variants.reduce((acc, v, i) => {
-      if (v.model === activeModel) { if (acc.count === idx) acc.idx = i; acc.count++; }
+      if (v.modelId === activeModelId) { if (acc.count === idx) acc.idx = i; acc.count++; }
       return acc;
     }, { count: 0, idx: -1 }).idx;
     setForm(f => ({ ...f, variants: f.variants.filter((_, i) => i !== realIdx) }));
   };
 
   const addModel = () => {
-    const name = `Model ${String.fromCharCode(65 + models.length)}`;
-    setModels([...models, name]);
-    setActiveModel(name);
-    setForm(f => ({ ...f, variants: [...f.variants, emptyVariant(name)] }));
+    const m = createModel();
+    setModels(prev => [...prev, m]);
+    setActiveModelId(m.id);
+    setForm(f => ({ ...f, variants: [...f.variants, emptyVariant(m.id)] }));
+  };
+
+  const removeModel = (modelId) => {
+    if (models.length <= 1) return;
+    const nextModels = models.filter(m => m.id !== modelId);
+    const nextActiveId = activeModelId === modelId ? nextModels[0].id : activeModelId;
+    setModels(nextModels);
+    setActiveModelId(nextActiveId);
+    setForm(f => ({ ...f, variants: f.variants.filter(v => v.modelId !== modelId) }));
+  };
+
+  const updateModelName = (modelId, name) => {
+    setModels(prev => prev.map(m => m.id === modelId ? { ...m, name } : m));
+    setForm(f => ({
+      ...f,
+      variants: f.variants.map(v => v.modelId === modelId ? { ...v, model: name } : v)
+    }));
   };
 
   const handleMainImage = async (e) => {
@@ -94,10 +127,17 @@ export default function ProductForm({ initial, onSubmit, saving }) {
     if (!form.name.trim()) return toast.error('Nama produk wajib');
     if (!form.variants.length) return toast.error('Minimal 1 variant');
     for (const v of form.variants) {
-      if (!v.model || !v.variant_name) return toast.error('Model dan nama variant wajib');
       if (!v.price) return toast.error('Harga variant wajib');
     }
-    onSubmit(form);
+    const modelNameById = Object.fromEntries(models.map(m => [m.id, m.name]));
+    const payload = {
+      ...form,
+      variants: form.variants.map(({ modelId, ...v }) => ({
+        ...v,
+        model: modelNameById[modelId] ?? v.model ?? ''
+      }))
+    };
+    onSubmit(payload);
   };
 
   return (
@@ -150,15 +190,34 @@ export default function ProductForm({ initial, onSubmit, saving }) {
         <div className="mb-4 flex flex-wrap items-center gap-2">
           <span className="text-sm font-semibold">Model:</span>
           {models.map(m => (
-            <button key={m} type="button" onClick={() => setActiveModel(m)}
-              className={`rounded-lg px-3 py-1.5 text-sm font-medium ${activeModel === m ? 'bg-primary-600 text-white' : 'bg-gray-100 text-gray-600'}`}>
-              {m}
-            </button>
+            <div key={m.id} className="flex items-center gap-1">
+              <button type="button" onClick={() => setActiveModelId(m.id)}
+                className={`rounded-lg px-3 py-1.5 text-sm font-medium ${activeModelId === m.id ? 'bg-primary-600 text-white' : 'bg-gray-100 text-gray-600'}`}>
+                {m.name || 'Tanpa nama'}
+              </button>
+              {models.length > 1 && (
+                <button type="button" onClick={() => removeModel(m.id)} className="rounded p-1 text-red-400 hover:bg-red-50 hover:text-red-600">
+                  <Trash2 size={12} />
+                </button>
+              )}
+            </div>
           ))}
           <button type="button" onClick={addModel} className="flex items-center gap-1 rounded-lg bg-primary-50 px-3 py-1.5 text-sm text-primary-600">
             <Plus size={14} /> Tambah Model
           </button>
         </div>
+
+        {activeModel && (
+          <div className="mb-4">
+            <label className="text-xs text-gray-500">Nama Model (opsional)</label>
+            <input
+              className="input-field"
+              placeholder="Contoh: iPhone 15, Kaos Polos, dll"
+              value={activeModel.name}
+              onChange={e => updateModelName(activeModelId, e.target.value)}
+            />
+          </div>
+        )}
 
         <div className="space-y-4">
           {variantsForModel.map((v, idx) => (
@@ -171,7 +230,7 @@ export default function ProductForm({ initial, onSubmit, saving }) {
               </div>
               <div className="grid gap-3 md:grid-cols-3">
                 <div>
-                  <label className="text-xs text-gray-500">Nama Variant *</label>
+                  <label className="text-xs text-gray-500">Nama Variant (opsional)</label>
                   <input className="input-field" placeholder="Hitam M" value={v.variant_name} onChange={e => updateVariant(idx, 'variant_name', e.target.value)} />
                 </div>
                 <div>
@@ -207,7 +266,9 @@ export default function ProductForm({ initial, onSubmit, saving }) {
               </div>
             </div>
           ))}
-          <button type="button" onClick={addVariant} className="btn-secondary w-full"><Plus size={16} /> Tambah Variant ({activeModel})</button>
+          <button type="button" onClick={addVariant} className="btn-secondary w-full">
+            <Plus size={16} /> Tambah Variant{activeModel?.name ? ` (${activeModel.name})` : ''}
+          </button>
         </div>
       </div>
 
