@@ -188,6 +188,36 @@ const attachPricingTiers = async (variants, conn = db) => {
   return variants;
 };
 
+const normalizeProductVariants = (variants, productPrice, productWeight) => {
+  const basePrice = parseFloat(productPrice) || 0;
+  const baseWeight = productWeight !== undefined && productWeight !== '' ? parseFloat(productWeight) : null;
+  const list = Array.isArray(variants) ? variants : [];
+
+  const normalized = list.map((variant) => ({
+    ...variant,
+    model: (variant.model ?? '').trim(),
+    variant_name: (variant.variant_name ?? '').trim(),
+    price: parseFloat(variant.price) || basePrice,
+    stock: parseInt(variant.stock, 10) || 0,
+    weight: variant.weight !== undefined && variant.weight !== '' ? parseFloat(variant.weight) : baseWeight
+  })).filter((variant) =>
+    variant.id ||
+    variant.model ||
+    variant.variant_name ||
+    variant.price ||
+    variant.stock ||
+    variant.image ||
+    variant.sku ||
+    (variant.cost_price !== undefined && variant.cost_price !== '')
+  );
+
+  if (!normalized.length) {
+    return [{ model: '', variant_name: '', stock: 0, price: basePrice, weight: baseWeight }];
+  }
+
+  return normalized;
+};
+
 const parseImages = (val) => {
   if (!val) return [];
   if (Array.isArray(val)) return val;
@@ -558,18 +588,23 @@ app.get('/api/products/:id', async (req, res) => {
 // ============ SELLER / ADMIN PRODUCTS ============
 
 const saveProduct = async (req, res, isUpdate = false) => {
+  const updating = isUpdate === true;
   const conn = await db.getConnection();
   try {
     await conn.beginTransaction();
     const { name, description, price, weight, category_id, status, variants, images } = req.body;
-    const parsedVariants = typeof variants === 'string' ? JSON.parse(variants) : variants;
+    const rawVariants = typeof variants === 'string' ? JSON.parse(variants) : variants;
     const parsedImages = typeof images === 'string' ? JSON.parse(images) : (images || []);
+    const parsedVariants = normalizeProductVariants(rawVariants, price, weight);
 
-    if (!name || !parsedVariants?.length) {
-      return res.status(400).json({ success: false, message: 'Nama produk dan minimal 1 variant wajib.' });
+    if (!name?.trim()) {
+      return res.status(400).json({ success: false, message: 'Nama produk wajib.' });
+    }
+    if (!parseFloat(price) && !parsedVariants.some((variant) => parseFloat(variant.price) > 0)) {
+      return res.status(400).json({ success: false, message: 'Harga produk wajib.' });
     }
 
-    if (!isUpdate && req.user.role !== 'admin') {
+    if (!updating && req.user.role !== 'admin') {
       const [seller] = await conn.query('SELECT store_address, store_origin_id FROM users WHERE id = ?', [req.user.id]);
       if (!seller.length || !seller[0].store_address || !seller[0].store_origin_id) {
         return res.status(400).json({
@@ -584,7 +619,7 @@ const saveProduct = async (req, res, isUpdate = false) => {
     const slug = slugify(name);
     let productId = req.params.id;
 
-    if (isUpdate) {
+    if (updating) {
       const [existing] = await conn.query('SELECT seller_id FROM products WHERE id = ?', [productId]);
       if (!existing.length) return res.status(404).json({ success: false, message: 'Produk tidak ditemukan.' });
       if (req.user.role !== 'admin' && existing[0].seller_id !== req.user.id) {
@@ -616,7 +651,7 @@ const saveProduct = async (req, res, isUpdate = false) => {
         const sku = await resolveVariantSku(variant.sku, variant.id, productId, conn);
         await conn.query(
           'UPDATE product_variants SET sku=?, model=?, variant_name=?, stock=?, price=?, cost_price=?, image=?, weight=? WHERE id=?',
-          [sku, variant.model, variant.variant_name, stock, vPrice, costPrice, variant.image || null, variant.weight || null, variant.id]
+          [sku, variant.model || '', variant.variant_name || '', stock, vPrice, costPrice, variant.image || null, variant.weight || null, variant.id]
         );
         await conn.query('DELETE FROM pricing_tiers WHERE variant_id = ?', [variant.id]);
         if (variant.pricing_tiers?.length) {
@@ -628,7 +663,7 @@ const saveProduct = async (req, res, isUpdate = false) => {
       } else {
         const [vr] = await conn.query(
           'INSERT INTO product_variants (product_id, model, variant_name, stock, price, cost_price, image, weight) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-          [productId, variant.model, variant.variant_name, stock, vPrice, costPrice, variant.image || null, variant.weight || null]
+          [productId, variant.model || '', variant.variant_name || '', stock, vPrice, costPrice, variant.image || null, variant.weight || null]
         );
         const variantId = vr.insertId;
         const sku = await resolveVariantSku(variant.sku, variantId, productId, conn);
@@ -640,7 +675,7 @@ const saveProduct = async (req, res, isUpdate = false) => {
     }
 
     await conn.commit();
-    res.json({ success: true, message: isUpdate ? 'Produk diperbarui.' : 'Produk ditambahkan.', data: { id: productId } });
+    res.json({ success: true, message: updating ? 'Produk diperbarui.' : 'Produk ditambahkan.', data: { id: productId } });
   } catch (e) {
     await conn.rollback();
     res.status(500).json({ success: false, message: e.message || 'Gagal menyimpan produk.' });
@@ -677,7 +712,7 @@ app.get('/api/seller/products/:id', authenticateToken, authorizeRoles(...MEMBER_
   res.json({ success: true, data: product });
 });
 
-app.post('/api/seller/products', authenticateToken, authorizeRoles(...MEMBER_ROLES, 'admin'), saveProduct);
+app.post('/api/seller/products', authenticateToken, authorizeRoles(...MEMBER_ROLES, 'admin'), (req, res) => saveProduct(req, res, false));
 app.put('/api/seller/products/:id', authenticateToken, authorizeRoles(...MEMBER_ROLES, 'admin'), (req, res) => saveProduct(req, res, true));
 
 app.delete('/api/seller/products/:id', authenticateToken, authorizeRoles(...MEMBER_ROLES, 'admin'), async (req, res) => {

@@ -13,25 +13,25 @@ const emptyVariant = (modelId = '') => ({
 });
 
 export default function ProductForm({ initial, onSubmit, saving }) {
-  const defaultModel = createModel();
-  const [models, setModels] = useState([defaultModel]);
-  const [activeModelId, setActiveModelId] = useState(defaultModel.id);
+  const [models, setModels] = useState([]);
+  const [activeModelId, setActiveModelId] = useState('');
+  const [showVariants, setShowVariants] = useState(false);
   const [form, setForm] = useState({
-    name: '', description: '', price: '', weight: '100', category_id: '', status: 'active', images: [], variants: [emptyVariant(defaultModel.id)]
+    name: '', description: '', price: '', weight: '100', category_id: '', status: 'active', images: [], variants: []
   });
   const fileRef = useRef();
 
   useEffect(() => {
     if (initial) {
-      const modelNames = [...new Set((initial.variants || []).map(v => v.model ?? ''))];
-      const builtModels = modelNames.length
-        ? modelNames.map(name => createModel(name))
-        : [createModel()];
+      const initialVariants = initial.variants || [];
+      const modelNames = [...new Set(initialVariants.map(v => v.model ?? ''))];
+      const builtModels = modelNames.length ? modelNames.map(name => createModel(name)) : [];
       const modelIdByName = Object.fromEntries(builtModels.map(m => [m.name, m.id]));
-      const firstModelId = builtModels[0].id;
+      const firstModelId = builtModels[0]?.id || '';
 
       setModels(builtModels);
       setActiveModelId(firstModelId);
+      setShowVariants(initialVariants.length > 0);
       setForm({
         name: initial.name || '',
         description: initial.description || '',
@@ -40,7 +40,7 @@ export default function ProductForm({ initial, onSubmit, saving }) {
         category_id: initial.category_id || '',
         status: initial.status || 'active',
         images: initial.images || [],
-        variants: (initial.variants || []).map(v => ({
+        variants: initialVariants.map(v => ({
           id: v.id,
           modelId: modelIdByName[v.model ?? ''] || firstModelId,
           model: v.model || '',
@@ -58,6 +58,15 @@ export default function ProductForm({ initial, onSubmit, saving }) {
 
   const activeModel = models.find(m => m.id === activeModelId);
   const variantsForModel = form.variants.filter(v => v.modelId === activeModelId);
+
+  const enableVariants = () => {
+    if (showVariants && models.length) return;
+    const m = createModel();
+    setModels([m]);
+    setActiveModelId(m.id);
+    setShowVariants(true);
+    setForm(f => ({ ...f, variants: [emptyVariant(m.id)] }));
+  };
 
   const updateVariant = (idx, field, val) => {
     const realIdx = form.variants.reduce((acc, v, i) => {
@@ -89,12 +98,12 @@ export default function ProductForm({ initial, onSubmit, saving }) {
   };
 
   const removeModel = (modelId) => {
-    if (models.length <= 1) return;
     const nextModels = models.filter(m => m.id !== modelId);
-    const nextActiveId = activeModelId === modelId ? nextModels[0].id : activeModelId;
+    const nextActiveId = activeModelId === modelId ? (nextModels[0]?.id || '') : activeModelId;
     setModels(nextModels);
     setActiveModelId(nextActiveId);
     setForm(f => ({ ...f, variants: f.variants.filter(v => v.modelId !== modelId) }));
+    if (!nextModels.length) setShowVariants(false);
   };
 
   const updateModelName = (modelId, name) => {
@@ -125,17 +134,20 @@ export default function ProductForm({ initial, onSubmit, saving }) {
   const handleSubmit = (e) => {
     e.preventDefault();
     if (!form.name.trim()) return toast.error('Nama produk wajib');
-    if (!form.variants.length) return toast.error('Minimal 1 variant');
-    for (const v of form.variants) {
-      if (!v.price) return toast.error('Harga variant wajib');
-    }
+    const basePrice = String(form.price || '').trim();
+    const hasVariantPrice = form.variants.some(v => String(v.price || '').trim());
+    if (!basePrice && !hasVariantPrice) return toast.error('Harga produk wajib');
+
     const modelNameById = Object.fromEntries(models.map(m => [m.id, m.name]));
     const payload = {
       ...form,
-      variants: form.variants.map(({ modelId, ...v }) => ({
-        ...v,
-        model: modelNameById[modelId] ?? v.model ?? ''
-      }))
+      variants: showVariants
+        ? form.variants.map(({ modelId, ...v }) => ({
+          ...v,
+          model: modelNameById[modelId] ?? v.model ?? '',
+          price: v.price || form.price
+        }))
+        : []
     };
     onSubmit(payload);
   };
@@ -148,7 +160,7 @@ export default function ProductForm({ initial, onSubmit, saving }) {
           <input className="input-field" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
         </div>
         <div>
-          <label className="mb-1 block text-sm font-medium">Harga Dasar</label>
+          <label className="mb-1 block text-sm font-medium">Harga *</label>
           <input type="number" className="input-field" value={form.price} onChange={e => setForm(f => ({ ...f, price: e.target.value }))} />
         </div>
         <div>
@@ -186,91 +198,93 @@ export default function ProductForm({ initial, onSubmit, saving }) {
         </div>
       </div>
 
-      <div className="card p-4">
-        <div className="mb-4 flex flex-wrap items-center gap-2">
-          <span className="text-sm font-semibold">Model:</span>
-          {models.map(m => (
-            <div key={m.id} className="flex items-center gap-1">
-              <button type="button" onClick={() => setActiveModelId(m.id)}
-                className={`rounded-lg px-3 py-1.5 text-sm font-medium ${activeModelId === m.id ? 'bg-primary-600 text-white' : 'bg-gray-100 text-gray-600'}`}>
-                {m.name || 'Tanpa nama'}
-              </button>
-              {models.length > 1 && (
+      {!showVariants ? (
+        <button type="button" onClick={enableVariants} className="btn-secondary w-full">
+          <Plus size={16} /> Tambah Model & Variant (opsional)
+        </button>
+      ) : (
+        <div className="card p-4">
+          <div className="mb-4 flex flex-wrap items-center gap-2">
+            <span className="text-sm font-semibold">Model (opsional):</span>
+            {models.map(m => (
+              <div key={m.id} className="flex items-center gap-1">
+                <button type="button" onClick={() => setActiveModelId(m.id)}
+                  className={`rounded-lg px-3 py-1.5 text-sm font-medium ${activeModelId === m.id ? 'bg-primary-600 text-white' : 'bg-gray-100 text-gray-600'}`}>
+                  {m.name || 'Tanpa nama'}
+                </button>
                 <button type="button" onClick={() => removeModel(m.id)} className="rounded p-1 text-red-400 hover:bg-red-50 hover:text-red-600">
                   <Trash2 size={12} />
                 </button>
-              )}
-            </div>
-          ))}
-          <button type="button" onClick={addModel} className="flex items-center gap-1 rounded-lg bg-primary-50 px-3 py-1.5 text-sm text-primary-600">
-            <Plus size={14} /> Tambah Model
-          </button>
-        </div>
-
-        {activeModel && (
-          <div className="mb-4">
-            <label className="text-xs text-gray-500">Nama Model (opsional)</label>
-            <input
-              className="input-field"
-              placeholder="Contoh: iPhone 15, Kaos Polos, dll"
-              value={activeModel.name}
-              onChange={e => updateModelName(activeModelId, e.target.value)}
-            />
+              </div>
+            ))}
+            <button type="button" onClick={addModel} className="flex items-center gap-1 rounded-lg bg-primary-50 px-3 py-1.5 text-sm text-primary-600">
+              <Plus size={14} /> Tambah Model
+            </button>
           </div>
-        )}
 
-        <div className="space-y-4">
-          {variantsForModel.map((v, idx) => (
-            <div key={idx} className="rounded-xl border border-gray-100 p-4">
-              <div className="mb-3 flex items-center justify-between">
-                <span className="text-sm font-semibold">Variant #{idx + 1}</span>
-                {variantsForModel.length > 1 && (
-                  <button type="button" onClick={() => removeVariant(idx)} className="text-red-500"><Trash2 size={16} /></button>
-                )}
-              </div>
-              <div className="grid gap-3 md:grid-cols-3">
-                <div>
-                  <label className="text-xs text-gray-500">Nama Variant (opsional)</label>
-                  <input className="input-field" placeholder="Hitam M" value={v.variant_name} onChange={e => updateVariant(idx, 'variant_name', e.target.value)} />
-                </div>
-                <div>
-                  <label className="text-xs text-gray-500">Harga *</label>
-                  <input type="number" className="input-field" value={v.price} onChange={e => updateVariant(idx, 'price', e.target.value)} />
-                </div>
-                <div>
-                  <label className="text-xs text-gray-500">HPP (opsional)</label>
-                  <input type="number" className="input-field" value={v.cost_price} onChange={e => updateVariant(idx, 'cost_price', e.target.value)} />
-                </div>
-                <div>
-                  <label className="text-xs text-gray-500">Stok</label>
-                  <input type="number" className="input-field" value={v.stock} onChange={e => updateVariant(idx, 'stock', e.target.value)} />
-                </div>
-                <div>
-                  <label className="text-xs text-gray-500">SKU (auto jika kosong)</label>
-                  <input className="input-field" placeholder="HSP-001-0001" value={v.sku} onChange={e => updateVariant(idx, 'sku', e.target.value)} />
-                </div>
-                <div>
-                  <label className="text-xs text-gray-500">Berat (gram)</label>
-                  <input type="number" className="input-field" value={v.weight} onChange={e => updateVariant(idx, 'weight', e.target.value)} />
-                </div>
-              </div>
-              <div className="mt-3">
-                <label className="text-xs text-gray-500">Gambar Variant</label>
-                <div className="mt-1 flex items-center gap-3">
-                  {v.image && <img src={assetUrl(v.image)} alt="" className="h-16 w-16 rounded-lg object-cover" />}
-                  <label className="btn-secondary cursor-pointer !py-2">
-                    <Upload size={14} /> Upload
-                    <input type="file" accept="image/*" className="hidden" onChange={e => e.target.files?.[0] && handleVariantImage(idx, e.target.files[0])} />
-                  </label>
-                </div>
-              </div>
+          {activeModel && (
+            <div className="mb-4">
+              <label className="text-xs text-gray-500">Nama Model (opsional)</label>
+              <input
+                className="input-field"
+                placeholder="Contoh: iPhone 15, Kaos Polos, dll"
+                value={activeModel.name}
+                onChange={e => updateModelName(activeModelId, e.target.value)}
+              />
             </div>
-          ))}
-          <button type="button" onClick={addVariant} className="btn-secondary w-full">
-            <Plus size={16} /> Tambah Variant{activeModel?.name ? ` (${activeModel.name})` : ''}
-          </button>
+          )}
+
+          <div className="space-y-4">
+            {variantsForModel.map((v, idx) => (
+              <div key={idx} className="rounded-xl border border-gray-100 p-4">
+                <div className="mb-3 flex items-center justify-between">
+                  <span className="text-sm font-semibold">Variant #{idx + 1} (opsional)</span>
+                  <button type="button" onClick={() => removeVariant(idx)} className="text-red-500"><Trash2 size={16} /></button>
+                </div>
+                <div className="grid gap-3 md:grid-cols-3">
+                  <div>
+                    <label className="text-xs text-gray-500">Nama Variant (opsional)</label>
+                    <input className="input-field" placeholder="Hitam M" value={v.variant_name} onChange={e => updateVariant(idx, 'variant_name', e.target.value)} />
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-500">Harga (kosongkan = pakai harga produk)</label>
+                    <input type="number" className="input-field" value={v.price} onChange={e => updateVariant(idx, 'price', e.target.value)} />
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-500">HPP (opsional)</label>
+                    <input type="number" className="input-field" value={v.cost_price} onChange={e => updateVariant(idx, 'cost_price', e.target.value)} />
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-500">Stok</label>
+                    <input type="number" className="input-field" value={v.stock} onChange={e => updateVariant(idx, 'stock', e.target.value)} />
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-500">SKU (auto jika kosong)</label>
+                    <input className="input-field" placeholder="HSP-001-0001" value={v.sku} onChange={e => updateVariant(idx, 'sku', e.target.value)} />
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-500">Berat (gram)</label>
+                    <input type="number" className="input-field" value={v.weight} onChange={e => updateVariant(idx, 'weight', e.target.value)} />
+                  </div>
+                </div>
+                <div className="mt-3">
+                  <label className="text-xs text-gray-500">Gambar Variant</label>
+                  <div className="mt-1 flex items-center gap-3">
+                    {v.image && <img src={assetUrl(v.image)} alt="" className="h-16 w-16 rounded-lg object-cover" />}
+                    <label className="btn-secondary cursor-pointer !py-2">
+                      <Upload size={14} /> Upload
+                      <input type="file" accept="image/*" className="hidden" onChange={e => e.target.files?.[0] && handleVariantImage(idx, e.target.files[0])} />
+                    </label>
+                  </div>
+                </div>
+              </div>
+            ))}
+            <button type="button" onClick={addVariant} className="btn-secondary w-full">
+              <Plus size={16} /> Tambah Variant{activeModel?.name ? ` (${activeModel.name})` : ''}
+            </button>
+          </div>
         </div>
-      </div>
+      )}
 
       <button type="submit" disabled={saving} className="btn-primary w-full md:w-auto">
         {saving ? <><Loader2 className="animate-spin" size={16} /> Menyimpan...</> : 'Simpan Produk'}

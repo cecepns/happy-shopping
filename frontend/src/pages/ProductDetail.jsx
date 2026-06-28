@@ -25,12 +25,17 @@ export default function ProductDetail() {
   useEffect(() => {
     get(API_ENDPOINTS.PRODUCTS.DETAIL(id)).then(res => {
       setProduct(res.data);
-      const models = [...new Set((res.data.variants || []).map(v => v.model))];
-      setSelectedModel(models[0] || '');
+      const namedModels = [...new Set((res.data.variants || []).map(v => v.model).filter(Boolean))];
+      setSelectedModel(namedModels[0] || '');
+      const firstVariant = (res.data.variants || [])[0] || null;
+      setSelectedVariant(firstVariant);
     }).finally(() => setLoading(false));
   }, [id]);
 
-  const modelVariants = (product?.variants || []).filter(v => v.model === selectedModel);
+  const modelVariants = (product?.variants || []).filter(v => !selectedModel || v.model === selectedModel);
+  const uniqueModels = [...new Set((product?.variants || []).map(v => v.model).filter(Boolean))];
+  const showModelPicker = uniqueModels.length > 0;
+  const showVariantPicker = modelVariants.some(v => v.variant_name);
 
   useEffect(() => {
     if (modelVariants.length) setSelectedVariant(modelVariants[0]);
@@ -117,29 +122,33 @@ export default function ProductDetail() {
               {formatCurrency(selectedVariant?.price || product.price)}
             </p>
 
-            <div className="mt-6">
-              <p className="mb-2 text-sm font-semibold">Model</p>
-              <div className="flex flex-wrap gap-2">
-                {product.models?.map(m => (
-                  <button key={m} onClick={() => setSelectedModel(m)}
-                    className={`rounded-xl px-4 py-2 text-sm font-medium border ${selectedModel === m ? 'border-primary-600 bg-primary-50 text-primary-700' : 'border-gray-200'}`}>
-                    {m}
-                  </button>
-                ))}
+            {showModelPicker && (
+              <div className="mt-6">
+                <p className="mb-2 text-sm font-semibold">Model</p>
+                <div className="flex flex-wrap gap-2">
+                  {uniqueModels.map(m => (
+                    <button key={m} type="button" onClick={() => setSelectedModel(m)}
+                      className={`rounded-xl px-4 py-2 text-sm font-medium border ${selectedModel === m ? 'border-primary-600 bg-primary-50 text-primary-700' : 'border-gray-200'}`}>
+                      {m}
+                    </button>
+                  ))}
+                </div>
               </div>
-            </div>
+            )}
 
-            <div className="mt-4">
-              <p className="mb-2 text-sm font-semibold">Variant</p>
-              <div className="flex flex-wrap gap-2">
-                {modelVariants.map(v => (
-                  <button key={v.id} onClick={() => setSelectedVariant(v)}
-                    className={`rounded-xl px-4 py-2 text-sm font-medium border ${selectedVariant?.id === v.id ? 'border-primary-600 bg-primary-50 text-primary-700' : 'border-gray-200'}`}>
-                    {v.variant_name} {v.stock <= 0 ? '(Habis)' : ''}
-                  </button>
-                ))}
+            {showVariantPicker && (
+              <div className="mt-4">
+                <p className="mb-2 text-sm font-semibold">Variant</p>
+                <div className="flex flex-wrap gap-2">
+                  {modelVariants.filter(v => v.variant_name).map(v => (
+                    <button key={v.id} type="button" onClick={() => setSelectedVariant(v)}
+                      className={`rounded-xl px-4 py-2 text-sm font-medium border ${selectedVariant?.id === v.id ? 'border-primary-600 bg-primary-50 text-primary-700' : 'border-gray-200'}`}>
+                      {v.variant_name} {v.stock <= 0 ? '(Habis)' : ''}
+                    </button>
+                  ))}
+                </div>
               </div>
-            </div>
+            )}
 
             {selectedVariant && (
               <p className="mt-2 text-sm text-gray-500">SKU: {selectedVariant.sku} | Stok: {selectedVariant.stock}</p>
