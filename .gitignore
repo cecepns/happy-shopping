@@ -11,3 +11,6 @@ uploads-happy-shopping/*
 !uploads-happy-shopping/.gitkeep
 backend/uploads-happy-shopping/*
 !backend/uploads-happy-shopping/.gitkeep
+mobile/node_modules/
+mobile/.expo/
+mobile/android/

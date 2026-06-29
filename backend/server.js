@@ -91,11 +91,11 @@ const getMailTransporter = () =>
   });
 
 const sendOtpEmail = async (email, name, code) => {
-  const subject = 'Kode OTP Login - Happy Shopping';
+  const subject = 'Verifikasi Email - Happy Shopping';
   const html = `<div style="font-family:sans-serif;max-width:480px;margin:0 auto">
     <h2>Happy Shopping</h2>
     <p>Halo ${name},</p>
-    <p>Kode OTP login Anda:</p>
+    <p>Kode verifikasi email Anda:</p>
     <p style="font-size:32px;font-weight:bold;letter-spacing:8px;color:#4f46e5">${code}</p>
     <p>Kode berlaku 10 menit. Jangan bagikan kode ini kepada siapapun.</p>
   </div>`;
@@ -143,6 +143,27 @@ const ensureOtpTable = async () => {
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
+};
+
+const ensureEmailVerifiedColumn = async () => {
+  try {
+    await db.query('ALTER TABLE users ADD COLUMN email_verified TINYINT NOT NULL DEFAULT 1');
+  } catch (e) {
+    if (e.code !== 'ER_DUP_FIELDNAME') throw e;
+  }
+};
+
+const buildAuthResponse = (u) => {
+  const token = jwt.sign({ id: u.id, username: u.username, name: u.name, role: u.role }, JWT_SECRET, { expiresIn: '7d' });
+  return {
+    success: true,
+    token,
+    data: {
+      id: u.id, username: u.username, name: u.name, role: u.role,
+      balance: parseFloat(u.balance), store_name: u.store_name,
+      store_setup_complete: hasStoreSetup(u)
+    }
+  };
 };
 
 const paginate = (req) => {
@@ -318,10 +339,16 @@ app.post('/api/auth/register', async (req, res) => {
 
     const hash = await bcrypt.hash(password, 10);
     const [result] = await db.query(
-      'INSERT INTO users (username, password, name, email, phone, role) VALUES (?, ?, ?, ?, ?, ?)',
-      [username, hash, name, email, phone || null, 'pembeli']
+      'INSERT INTO users (username, password, name, email, phone, role, email_verified) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [username, hash, name, email, phone || null, 'pembeli', 0]
     );
-    res.status(201).json({ success: true, message: 'Registrasi berhasil.', data: { id: result.insertId, username, name, role: 'pembeli' } });
+    await createAndSendOtp(result.insertId, email, name);
+    res.status(201).json({
+      success: true,
+      requires_otp: true,
+      message: 'Kode verifikasi telah dikirim ke email Anda.',
+      data: { id: result.insertId, username, email_hint: maskEmail(email) }
+    });
   } catch (e) {
     console.error(e);
     res.status(500).json({ success: false, message: 'Gagal registrasi.' });
@@ -336,20 +363,13 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Username atau password salah.' });
     }
     const u = users[0];
-    if (!u.email) return res.status(400).json({ success: false, message: 'Akun belum memiliki email. Hubungi admin.' });
-    await createAndSendOtp(u.id, u.email, u.name);
-    res.json({
-      success: true,
-      requires_otp: true,
-      message: 'Kode OTP telah dikirim ke email Anda.',
-      data: { email_hint: maskEmail(u.email), username: u.username }
-    });
+    if (!u.email_verified) {
+      return res.status(400).json({ success: false, message: 'Email belum diverifikasi. Silakan selesaikan verifikasi saat registrasi.' });
+    }
+    res.json(buildAuthResponse(u));
   } catch (e) {
     console.error('[LOGIN ERROR]', e);
-    const msg = e.code === 'ER_NO_SUCH_TABLE'
-      ? 'Database belum siap. Hubungi admin.'
-      : 'Gagal mengirim OTP. Silakan coba lagi.';
-    res.status(500).json({ success: false, message: msg });
+    res.status(500).json({ success: false, message: 'Gagal login. Silakan coba lagi.' });
   }
 });
 
@@ -374,15 +394,9 @@ app.post('/api/auth/verify-otp', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Kode OTP tidak valid atau sudah kadaluarsa.' });
     }
     await db.query('UPDATE otp_codes SET used = 1 WHERE id = ?', [otps[0].id]);
-    const token = jwt.sign({ id: u.id, username: u.username, name: u.name, role: u.role }, JWT_SECRET, { expiresIn: '7d' });
-    res.json({
-      success: true, token,
-      data: {
-        id: u.id, username: u.username, name: u.name, role: u.role,
-        balance: parseFloat(u.balance), store_name: u.store_name,
-        store_setup_complete: hasStoreSetup(u)
-      }
-    });
+    await db.query('UPDATE users SET email_verified = 1 WHERE id = ?', [u.id]);
+    u.email_verified = 1;
+    res.json({ ...buildAuthResponse(u), message: 'Email berhasil diverifikasi.' });
   } catch (e) {
     console.error(e);
     res.status(500).json({ success: false, message: 'Gagal verifikasi OTP.' });
@@ -391,16 +405,19 @@ app.post('/api/auth/verify-otp', async (req, res) => {
 
 app.post('/api/auth/resend-otp', async (req, res) => {
   try {
-    const { username, password } = req.body;
+    const { username } = req.body;
+    if (!username) return res.status(400).json({ success: false, message: 'Username wajib diisi.' });
     const [users] = await db.query('SELECT * FROM users WHERE username = ? AND is_active = 1', [username]);
-    if (!users.length || !(await bcrypt.compare(password, users[0].password))) {
-      return res.status(400).json({ success: false, message: 'Username atau password salah.' });
-    }
+    if (!users.length) return res.status(400).json({ success: false, message: 'User tidak ditemukan.' });
     const u = users[0];
+    if (u.email_verified) {
+      return res.status(400).json({ success: false, message: 'Email sudah diverifikasi.' });
+    }
+    if (!u.email) return res.status(400).json({ success: false, message: 'Akun belum memiliki email.' });
     await createAndSendOtp(u.id, u.email, u.name);
-    res.json({ success: true, message: 'Kode OTP baru telah dikirim.', data: { email_hint: maskEmail(u.email) } });
+    res.json({ success: true, message: 'Kode verifikasi baru telah dikirim.', data: { email_hint: maskEmail(u.email) } });
   } catch (e) {
-    res.status(500).json({ success: false, message: 'Gagal mengirim ulang OTP.' });
+    res.status(500).json({ success: false, message: 'Gagal mengirim ulang kode verifikasi.' });
   }
 });
 
@@ -1230,7 +1247,7 @@ app.delete('/api/admin/payment-methods/:id', authenticateToken, authorizeRoles('
 
 app.get('/api/health', (_, res) => res.json({ success: true, message: 'Happy Shopping API is running.' }));
 
-ensureOtpTable()
+Promise.all([ensureOtpTable(), ensureEmailVerifiedColumn()])
   .then(() => {
     app.listen(PORT, () => console.log(`Happy Shopping API running on port ${PORT}`));
   })
