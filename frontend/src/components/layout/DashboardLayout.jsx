@@ -9,7 +9,7 @@ const adminLinks = [
   { to: '/admin/orders', icon: ShoppingCart, label: 'Orders' },
   { to: '/admin/banners', icon: Image, label: 'Banners' },
   { to: '/admin/balance', icon: Wallet, label: 'Saldo' },
-  { to: '/admin/topup', icon: Wallet, label: 'Topup' },
+  { to: '/admin/topup', icon: Wallet, label: 'Client Request' },
   { to: '/admin/categories', icon: Tags, label: 'Kategori' },
   { to: '/admin/settings', icon: Settings, label: 'Settings' }
 ];
